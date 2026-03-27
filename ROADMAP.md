@@ -35,9 +35,10 @@ Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scri
 - Round-trip formatting preservation (comments, whitespace outside edited region)
 - Atomic file writes (write-to-temp, rename-over-original)
 
-## Phase 3: MCP Server
+## Phase 3: MCP Server ✓
 
-- Expose read/write tools as MCP tools via stdio transport
+- `elmq mcp` — stdio MCP server using `rmcp` SDK
+- 4 consolidated tools: `elm_summary`, `elm_get`, `elm_edit`, `elm_module`
 - Tool descriptions optimized for token efficiency
 - Compact output as default for MCP responses
 

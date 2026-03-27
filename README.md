@@ -8,7 +8,7 @@ A CLI and MCP server for querying and editing Elm files — like jq for Elm.
 
 Designed as a next-gen LSP for agents and scripts, not editors. Optimized for token efficiency and structured tool calling.
 
-> **Status:** Active development. Supports reading and writing Elm declarations, imports, and module lines. See [ROADMAP.md](ROADMAP.md) for what's planned.
+> **Status:** Active development. Supports reading and writing Elm declarations, imports, and module lines. MCP server available via `elmq mcp`. See [ROADMAP.md](ROADMAP.md) for what's planned.
 
 ## Install
 
@@ -152,6 +152,36 @@ elmq list src/Main.elm --format json
       "end_line": 28
     }
   ]
+}
+```
+
+## MCP Server
+
+Start the MCP server (stdio transport):
+
+```sh
+elmq mcp
+```
+
+Exposes 4 tools optimized for LLM agents:
+
+| Tool | Description |
+|------|-------------|
+| `elm_summary` | File overview: module, imports, declarations with types and line numbers |
+| `elm_get` | Extract full source text of a declaration by name |
+| `elm_edit` | Modify declarations: `set` (upsert), `patch` (find-replace), `rm` (remove) |
+| `elm_module` | Manage imports and exposing list: `add_import`, `remove_import`, `expose`, `unexpose` |
+
+Configure in your MCP client (e.g. Claude Code `settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "elmq": {
+      "command": "elmq",
+      "args": ["mcp"]
+    }
+  }
 }
 ```
 

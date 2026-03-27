@@ -1,4 +1,5 @@
 mod cli;
+mod mcp;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -111,6 +112,11 @@ fn main() -> Result<()> {
             let (source, summary) = load_and_parse(&file)?;
             let result = writer::unexpose(&source, &summary, &item)?;
             writer::atomic_write(&file, &result)?;
+        }
+        Command::Mcp => {
+            tokio::runtime::Runtime::new()
+                .context("failed to create tokio runtime")?
+                .block_on(mcp::run_mcp_server())?;
         }
     }
 

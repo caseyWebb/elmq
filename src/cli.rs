@@ -89,6 +89,8 @@ pub enum Command {
         /// Item to unexpose (e.g. "helper")
         item: String,
     },
+    /// Start MCP server (stdio transport)
+    Mcp,
 }
 
 #[derive(Subcommand)]
