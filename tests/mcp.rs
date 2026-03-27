@@ -212,7 +212,7 @@ fn summary_file_not_found() {
         serde_json::json!({"file": "nonexistent.elm"}),
     );
     assert!(is_error(&resp));
-    assert!(result_text(&resp).contains("could not read file"));
+    assert!(result_text(&resp).contains("invalid path"));
 }
 
 // -- elm_get tests --
@@ -257,7 +257,7 @@ fn get_declaration_not_found() {
 
 #[test]
 fn edit_set_declaration() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(".").unwrap();
     let file = dir.path().join("Test.elm");
     std::fs::write(&file, "module Test exposing (foo)\n\n\nfoo =\n    42\n").unwrap();
 
@@ -278,7 +278,7 @@ fn edit_set_declaration() {
 
 #[test]
 fn edit_patch_declaration() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(".").unwrap();
     let file = dir.path().join("Test.elm");
     std::fs::write(&file, "module Test exposing (foo)\n\n\nfoo =\n    42\n").unwrap();
 
@@ -302,7 +302,7 @@ fn edit_patch_declaration() {
 
 #[test]
 fn edit_rm_declaration() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(".").unwrap();
     let file = dir.path().join("Test.elm");
     std::fs::write(
         &file,
@@ -335,8 +335,8 @@ fn edit_invalid_action() {
             "action": "invalid"
         }),
     );
-    assert!(is_error(&resp));
-    assert!(result_text(&resp).contains("unknown action"));
+    // serde rejects unknown enum variants at the protocol level
+    assert!(resp.get("error").is_some() || is_error(&resp));
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn edit_missing_required_params() {
 
 #[test]
 fn module_add_import() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(".").unwrap();
     let file = dir.path().join("Test.elm");
     std::fs::write(
         &file,
@@ -381,7 +381,7 @@ fn module_add_import() {
 
 #[test]
 fn module_remove_import() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(".").unwrap();
     let file = dir.path().join("Test.elm");
     std::fs::write(
         &file,
@@ -406,7 +406,7 @@ fn module_remove_import() {
 
 #[test]
 fn module_expose() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(".").unwrap();
     let file = dir.path().join("Test.elm");
     std::fs::write(
         &file,
@@ -431,7 +431,7 @@ fn module_expose() {
 
 #[test]
 fn module_unexpose() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(".").unwrap();
     let file = dir.path().join("Test.elm");
     std::fs::write(
         &file,
@@ -462,6 +462,27 @@ fn module_invalid_action() {
             "action": "invalid"
         }),
     );
+    // serde rejects unknown enum variants at the protocol level
+    assert!(resp.get("error").is_some() || is_error(&resp));
+}
+
+// -- Path traversal tests --
+
+#[test]
+fn rejects_absolute_path_outside_cwd() {
+    let resp = call_tool("elm_summary", serde_json::json!({"file": "/etc/hosts"}));
     assert!(is_error(&resp));
-    assert!(result_text(&resp).contains("unknown action"));
+    assert!(result_text(&resp).contains("outside the working directory"));
+}
+
+#[test]
+fn rejects_relative_path_traversal() {
+    let resp = call_tool(
+        "elm_summary",
+        serde_json::json!({"file": "../../etc/passwd"}),
+    );
+    assert!(is_error(&resp));
+    // Either "outside the working directory" or "invalid path" (if file doesn't exist)
+    let text = result_text(&resp);
+    assert!(text.contains("outside the working directory") || text.contains("invalid path"),);
 }

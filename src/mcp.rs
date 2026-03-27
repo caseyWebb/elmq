@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rmcp::{
@@ -71,11 +71,22 @@ pub struct GetParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EditAction {
+    /// Upsert a declaration from source text
+    Set,
+    /// Find-and-replace within a declaration
+    Patch,
+    /// Remove a declaration
+    Rm,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct EditParams {
     /// Path to the Elm file
     pub file: String,
-    /// Action to perform: "set", "patch", or "rm"
-    pub action: String,
+    /// Action to perform
+    pub action: EditAction,
     /// Full source text of the declaration (required for "set")
     pub source: Option<String>,
     /// Declaration name (optional for "set" where it's parsed from source; required for "patch" and "rm")
@@ -87,11 +98,24 @@ pub struct EditParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModuleAction {
+    /// Add or replace an import clause
+    AddImport,
+    /// Remove an import by module name
+    RemoveImport,
+    /// Add an item to the module's exposing list
+    Expose,
+    /// Remove an item from the module's exposing list
+    Unexpose,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ModuleParams {
     /// Path to the Elm file
     pub file: String,
-    /// Action to perform: "add_import", "remove_import", "expose", or "unexpose"
-    pub action: String,
+    /// Action to perform
+    pub action: ModuleAction,
     /// Import clause, e.g. "Html exposing (Html, div)" (required for "add_import")
     pub import: Option<String>,
     /// Module name to remove, e.g. "Html" (required for "remove_import")
@@ -102,10 +126,31 @@ pub struct ModuleParams {
 
 // -- Helpers --
 
-fn load_and_parse(file: &str) -> Result<(String, FileSummary), String> {
+/// Validate that a file path resolves to within the server's working directory.
+fn validate_path(file: &str) -> Result<PathBuf, String> {
     let path = Path::new(file);
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("invalid path \"{file}\": {e}"))?;
+
+    let cwd = std::env::current_dir().map_err(|e| format!("could not determine cwd: {e}"))?;
+    let canonical_cwd = cwd
+        .canonicalize()
+        .map_err(|e| format!("could not canonicalize cwd: {e}"))?;
+
+    if !canonical.starts_with(&canonical_cwd) {
+        return Err(format!(
+            "path \"{file}\" resolves outside the working directory"
+        ));
+    }
+
+    Ok(canonical)
+}
+
+fn load_and_parse(file: &str) -> Result<(String, FileSummary), String> {
+    let path = validate_path(file)?;
     let source =
-        std::fs::read_to_string(path).map_err(|e| format!("could not read file {file}: {e}"))?;
+        std::fs::read_to_string(&path).map_err(|e| format!("could not read file {file}: {e}"))?;
 
     let tree = parser::parse(&source).map_err(|e| format!("parse error: {e}"))?;
 
@@ -204,7 +249,7 @@ fn format_doc_comment(out: &mut String, doc: &str) {
     }
 }
 
-fn format_get_json(decl: &Declaration, source: &str) -> String {
+fn format_get_json(decl: &Declaration, source: &str) -> Result<String, String> {
     let json = serde_json::json!({
         "name": decl.name,
         "kind": decl.kind,
@@ -212,7 +257,7 @@ fn format_get_json(decl: &Declaration, source: &str) -> String {
         "start_line": decl.start_line,
         "end_line": decl.end_line,
     });
-    serde_json::to_string_pretty(&json).unwrap()
+    serde_json::to_string_pretty(&json).map_err(|e| format!("JSON serialization error: {e}"))
 }
 
 // -- Tool implementations --
@@ -254,7 +299,7 @@ impl ElmqServer {
         let decl_source = source_lines[start..end].join("\n");
 
         if is_json {
-            Ok(format_get_json(decl, &decl_source))
+            format_get_json(decl, &decl_source)
         } else {
             Ok(decl_source)
         }
@@ -266,10 +311,10 @@ impl ElmqServer {
     )]
     fn elm_edit(&self, Parameters(params): Parameters<EditParams>) -> Result<String, String> {
         let (source, summary) = load_and_parse(&params.file)?;
-        let path = Path::new(&params.file);
+        let path = validate_path(&params.file)?;
 
-        match params.action.as_str() {
-            "set" => {
+        match params.action {
+            EditAction::Set => {
                 let new_source = params
                     .source
                     .as_deref()
@@ -283,10 +328,10 @@ impl ElmqServer {
                 };
 
                 let result = writer::upsert_declaration(&source, &summary, &decl_name, new_source);
-                writer::atomic_write(path, &result).map_err(|e| format!("write error: {e}"))?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("set {decl_name} in {}", params.file))
             }
-            "patch" => {
+            EditAction::Patch => {
                 let name = params
                     .name
                     .as_deref()
@@ -302,10 +347,10 @@ impl ElmqServer {
 
                 let result = writer::patch_declaration(&source, &summary, name, old, new)
                     .map_err(|e| e.to_string())?;
-                writer::atomic_write(path, &result).map_err(|e| format!("write error: {e}"))?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("patched {name} in {}", params.file))
             }
-            "rm" => {
+            EditAction::Rm => {
                 let name = params
                     .name
                     .as_deref()
@@ -313,12 +358,9 @@ impl ElmqServer {
 
                 let result = writer::remove_declaration(&source, &summary, name)
                     .map_err(|e| e.to_string())?;
-                writer::atomic_write(path, &result).map_err(|e| format!("write error: {e}"))?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("removed {name} from {}", params.file))
             }
-            other => Err(format!(
-                "unknown action \"{other}\": expected \"set\", \"patch\", or \"rm\""
-            )),
         }
     }
 
@@ -328,20 +370,20 @@ impl ElmqServer {
     )]
     fn elm_module(&self, Parameters(params): Parameters<ModuleParams>) -> Result<String, String> {
         let (source, summary) = load_and_parse(&params.file)?;
-        let path = Path::new(&params.file);
+        let path = validate_path(&params.file)?;
 
-        match params.action.as_str() {
-            "add_import" => {
+        match params.action {
+            ModuleAction::AddImport => {
                 let import = params
                     .import
                     .as_deref()
                     .ok_or("\"import\" is required for action \"add_import\"")?;
 
                 let result = writer::add_import(&source, &summary, import);
-                writer::atomic_write(path, &result).map_err(|e| format!("write error: {e}"))?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("added import in {}", params.file))
             }
-            "remove_import" => {
+            ModuleAction::RemoveImport => {
                 let module_name = params
                     .module_name
                     .as_deref()
@@ -349,20 +391,20 @@ impl ElmqServer {
 
                 let result =
                     writer::remove_import(&source, module_name).map_err(|e| e.to_string())?;
-                writer::atomic_write(path, &result).map_err(|e| format!("write error: {e}"))?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("removed import {module_name} from {}", params.file))
             }
-            "expose" => {
+            ModuleAction::Expose => {
                 let item = params
                     .item
                     .as_deref()
                     .ok_or("\"item\" is required for action \"expose\"")?;
 
                 let result = writer::expose(&source, &summary, item).map_err(|e| e.to_string())?;
-                writer::atomic_write(path, &result).map_err(|e| format!("write error: {e}"))?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("exposed {item} in {}", params.file))
             }
-            "unexpose" => {
+            ModuleAction::Unexpose => {
                 let item = params
                     .item
                     .as_deref()
@@ -370,12 +412,9 @@ impl ElmqServer {
 
                 let result =
                     writer::unexpose(&source, &summary, item).map_err(|e| e.to_string())?;
-                writer::atomic_write(path, &result).map_err(|e| format!("write error: {e}"))?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("unexposed {item} in {}", params.file))
             }
-            other => Err(format!(
-                "unknown action \"{other}\": expected \"add_import\", \"remove_import\", \"expose\", or \"unexpose\""
-            )),
         }
     }
 }
