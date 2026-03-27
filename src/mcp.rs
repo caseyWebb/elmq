@@ -30,21 +30,16 @@ impl ElmqServer {
 #[tool_handler]
 impl ServerHandler for ElmqServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(
                 "Query and edit Elm files — like jq for Elm. \
                  Use elm_summary to see file structure, elm_get to read declarations, \
-                 elm_edit to modify declarations, and elm_module to manage imports and exposing."
-                    .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: rmcp::model::Implementation {
-                name: "elmq".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
+                 elm_edit to modify declarations, and elm_module to manage imports and exposing.",
+            )
+            .with_server_info(rmcp::model::Implementation::new(
+                "elmq",
+                env!("CARGO_PKG_VERSION"),
+            ))
     }
 }
 
