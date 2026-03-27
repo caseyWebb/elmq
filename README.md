@@ -8,7 +8,7 @@ A CLI and MCP server for querying and editing Elm files — like jq for Elm.
 
 Designed as a next-gen LSP for agents and scripts, not editors. Optimized for token efficiency and structured tool calling.
 
-> **Status:** Early development. Currently supports listing declarations in Elm files. See [ROADMAP.md](ROADMAP.md) for what's planned.
+> **Status:** Early development. Currently supports listing and extracting declarations from Elm files. See [ROADMAP.md](ROADMAP.md) for what's planned.
 
 ## Install
 
@@ -62,6 +62,28 @@ types:
     Messages for the update function
 ...
 ```
+
+### Extract a declaration
+
+```sh
+elmq get src/Main.elm update
+```
+
+```
+update : Msg -> Model -> Model
+update msg model =
+    case msg of
+        Increment ->
+            { model | count = model.count + 1 }
+
+        Decrement ->
+            { model | count = model.count - 1 }
+
+        Reset ->
+            { model | count = 0 }
+```
+
+Includes doc comments and type annotations when present. Returns non-zero exit code if the declaration is not found.
 
 ### JSON output
 

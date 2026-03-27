@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is elmq?
 
-A Rust CLI (and future MCP server) for querying and editing Elm files — like jq for Elm. Uses tree-sitter-elm for parsing. Early stage; currently supports `elmq list` to summarize declarations in an Elm file.
+A Rust CLI (and future MCP server) for querying and editing Elm files — like jq for Elm. Uses tree-sitter-elm for parsing. Early stage; currently supports `elmq list` to summarize declarations and `elmq get` to extract a single declaration's source.
 
 ## Build & Test Commands
 
@@ -27,11 +27,13 @@ Rust toolchain is managed via mise (`mise install` to set up).
 ## Architecture
 
 - **`src/lib.rs`** — Public types (`FileSummary`, `Declaration`, `DeclarationKind`). The library crate root.
-- **`src/parser.rs`** — All tree-sitter-elm parsing logic: `parse()` returns a tree, `extract_summary()` walks it to produce a `FileSummary`. Unit tests live here inline.
+- **`src/parser.rs`** — All tree-sitter-elm parsing logic: `parse()` returns a tree, `extract_summary()` walks it to produce a `FileSummary`, `find_declaration()` looks up by name. Unit tests live here inline.
 - **`src/cli.rs`** — clap derive definitions (`Cli`, `Command`, `Format`).
 - **`src/main.rs`** — Thin CLI entry point. Reads file, calls parser, formats output (compact or JSON). Not part of the library crate.
 
 The library (`lib.rs` + `parser.rs`) is fully testable without the CLI binary.
+
+- **`tests/get.rs`** — Integration tests for the `get` command (runs the binary).
 
 ## Conventions
 

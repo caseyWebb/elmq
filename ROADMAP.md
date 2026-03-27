@@ -20,10 +20,10 @@ Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scri
 - Add `--docs` flag for inline doc comments
 - Omit empty sections, remove redundant per-declaration exposed status
 
-## Phase 1: Read Tools
+## Phase 1: Read Tools ✓
 
-- `list-modules` — scan a directory for Elm modules
-- `get-declaration` — extract the full source text of a declaration by name
+- ~~`list-modules`~~ — deferred (agents find files effectively; not needed yet)
+- `get` — extract the full source text of a declaration by name
 
 ## Phase 2: Write Tools
 

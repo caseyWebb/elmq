@@ -23,6 +23,18 @@ pub enum Command {
         #[arg(long)]
         docs: bool,
     },
+    /// Extract the full source of a declaration by name
+    Get {
+        /// Path to the Elm file
+        file: PathBuf,
+
+        /// Name of the declaration to extract
+        name: String,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Compact)]
+        format: Format,
+    },
 }
 
 #[derive(Clone, ValueEnum)]

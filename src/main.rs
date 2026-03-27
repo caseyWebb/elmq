@@ -3,31 +3,51 @@ mod cli;
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Cli, Command, Format};
-use elmq::{DeclarationKind, FileSummary};
 use elmq::parser;
+use elmq::{Declaration, DeclarationKind, FileSummary};
+use std::path::Path;
+
+fn load_and_parse(file: &Path) -> Result<(String, FileSummary)> {
+    let source = std::fs::read_to_string(file)
+        .with_context(|| format!("could not read file: {}", file.display()))?;
+
+    let tree = parser::parse(&source)?;
+
+    if tree.root_node().has_error() {
+        eprintln!("warning: parse errors detected in {}", file.display());
+    }
+
+    let summary = parser::extract_summary(&tree, &source);
+    Ok((source, summary))
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Command::List { file, format, docs } => {
-            let source = std::fs::read_to_string(&file)
-                .with_context(|| format!("could not read file: {}", file.display()))?;
-
-            let tree = parser::parse(&source)?;
-
-            if tree.root_node().has_error() {
-                eprintln!(
-                    "warning: parse errors detected in {}",
-                    file.display()
-                );
-            }
-
-            let summary = parser::extract_summary(&tree, &source);
+            let (_source, summary) = load_and_parse(&file)?;
 
             match format {
                 Format::Compact => print_compact(&summary, docs),
                 Format::Json => print_json(&summary)?,
+            }
+        }
+        Command::Get { file, name, format } => {
+            let (source, summary) = load_and_parse(&file)?;
+
+            let decl = summary.find_declaration(&name).with_context(|| {
+                format!("declaration '{}' not found in {}", name, file.display())
+            })?;
+
+            let source_lines: Vec<&str> = source.lines().collect();
+            let start = decl.start_line - 1;
+            let end = decl.end_line.min(source_lines.len());
+            let decl_source = source_lines[start..end].join("\n");
+
+            match format {
+                Format::Compact => println!("{decl_source}"),
+                Format::Json => print_get_json(decl, &decl_source)?,
             }
         }
     }
@@ -77,9 +97,7 @@ fn print_compact(summary: &FileSummary, show_docs: bool) {
             println!("{label}");
             for d in decls {
                 println!("  {:<name_w$}  L{}-{}", d.name, d.start_line, d.end_line);
-                if show_docs
-                    && let Some(doc) = &d.doc_comment
-                {
+                if show_docs && let Some(doc) = &d.doc_comment {
                     print_doc_comment(doc);
                 }
             }
@@ -93,19 +111,14 @@ fn print_compact(summary: &FileSummary, show_docs: bool) {
         for d in &functions {
             let type_str = d.type_annotation.as_deref().unwrap_or("");
             if type_str.is_empty() {
-                println!(
-                    "  {:<name_w$}  L{}-{}",
-                    d.name, d.start_line, d.end_line,
-                );
+                println!("  {:<name_w$}  L{}-{}", d.name, d.start_line, d.end_line,);
             } else {
                 println!(
                     "  {:<name_w$}  {}  L{}-{}",
                     d.name, type_str, d.start_line, d.end_line,
                 );
             }
-            if show_docs
-                && let Some(doc) = &d.doc_comment
-            {
+            if show_docs && let Some(doc) = &d.doc_comment {
                 print_doc_comment(doc);
             }
         }
@@ -118,19 +131,14 @@ fn print_compact(summary: &FileSummary, show_docs: bool) {
         for d in &ports {
             let type_str = d.type_annotation.as_deref().unwrap_or("");
             if type_str.is_empty() {
-                println!(
-                    "  {:<name_w$}  L{}-{}",
-                    d.name, d.start_line, d.end_line,
-                );
+                println!("  {:<name_w$}  L{}-{}", d.name, d.start_line, d.end_line,);
             } else {
                 println!(
                     "  {:<name_w$}  {}  L{}-{}",
                     d.name, type_str, d.start_line, d.end_line,
                 );
             }
-            if show_docs
-                && let Some(doc) = &d.doc_comment
-            {
+            if show_docs && let Some(doc) = &d.doc_comment {
                 print_doc_comment(doc);
             }
         }
@@ -147,6 +155,18 @@ fn print_doc_comment(doc: &str) {
     for line in stripped.lines() {
         println!("    {}", line.trim());
     }
+}
+
+fn print_get_json(decl: &Declaration, source: &str) -> Result<()> {
+    let json = serde_json::json!({
+        "name": decl.name,
+        "kind": decl.kind,
+        "source": source,
+        "start_line": decl.start_line,
+        "end_line": decl.end_line,
+    });
+    println!("{}", serde_json::to_string_pretty(&json)?);
+    Ok(())
 }
 
 fn print_json(summary: &FileSummary) -> Result<()> {

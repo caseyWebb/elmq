@@ -7,7 +7,9 @@ pub fn parse(source: &str) -> Result<Tree> {
     parser
         .set_language(&tree_sitter_elm::LANGUAGE.into())
         .context("failed to load Elm grammar")?;
-    parser.parse(source, None).context("failed to parse Elm source")
+    parser
+        .parse(source, None)
+        .context("failed to parse Elm source")
 }
 
 pub fn extract_summary(tree: &Tree, source: &str) -> FileSummary {
@@ -303,5 +305,25 @@ port sendMessage : String -> Cmd msg
             summary.declarations[0].type_annotation.as_deref(),
             Some("String -> Cmd msg")
         );
+    }
+
+    #[test]
+    fn test_find_declaration_found() {
+        let tree = parse(SAMPLE_ELM).unwrap();
+        let summary = extract_summary(&tree, SAMPLE_ELM);
+
+        let decl = summary.find_declaration("update");
+        assert!(decl.is_some());
+        let decl = decl.unwrap();
+        assert_eq!(decl.name, "update");
+        assert_eq!(decl.kind, DeclarationKind::Function);
+    }
+
+    #[test]
+    fn test_find_declaration_not_found() {
+        let tree = parse(SAMPLE_ELM).unwrap();
+        let summary = extract_summary(&tree, SAMPLE_ELM);
+
+        assert!(summary.find_declaration("nonExistent").is_none());
     }
 }

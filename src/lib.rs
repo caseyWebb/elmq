@@ -9,6 +9,12 @@ pub struct FileSummary {
     pub declarations: Vec<Declaration>,
 }
 
+impl FileSummary {
+    pub fn find_declaration(&self, name: &str) -> Option<&Declaration> {
+        self.declarations.iter().find(|d| d.name == name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Declaration {
     pub name: String,
