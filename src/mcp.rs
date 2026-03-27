@@ -124,14 +124,32 @@ pub struct ModuleParams {
 /// Validate that a file path resolves to within the server's working directory.
 fn validate_path(file: &str) -> Result<PathBuf, String> {
     let path = Path::new(file);
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("invalid path \"{file}\": {e}"))?;
 
     let cwd = std::env::current_dir().map_err(|e| format!("could not determine cwd: {e}"))?;
     let canonical_cwd = cwd
         .canonicalize()
         .map_err(|e| format!("could not canonicalize cwd: {e}"))?;
+
+    // For absolute paths, check containment without requiring the file to exist.
+    // This avoids platform-dependent behavior where canonicalize() fails on
+    // non-existent files (e.g. "/etc/hosts" on Windows).
+    if path.is_absolute() {
+        // Normalize what we can without requiring existence
+        let normalized = if let Ok(canonical) = path.canonicalize() {
+            canonical
+        } else {
+            path.to_path_buf()
+        };
+        if !normalized.starts_with(&canonical_cwd) {
+            return Err(format!(
+                "path \"{file}\" resolves outside the working directory"
+            ));
+        }
+    }
+
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("invalid path \"{file}\": {e}"))?;
 
     if !canonical.starts_with(&canonical_cwd) {
         return Err(format!(
