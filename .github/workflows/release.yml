@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use-cross: false
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use-cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+            use-cross: false
+          - target: aarch64-apple-darwin
+            os: macos-14
+            use-cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use-cross: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+
+      - name: Install cross
+        if: matrix.use-cross
+        run: cargo install cross --locked
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Add Rust target
+        if: "!matrix.use-cross"
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.use-cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../elmq-${{ github.ref_name }}-${{ matrix.target }}.tar.gz elmq
+        shell: bash
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../elmq-${{ github.ref_name }}-${{ matrix.target }}.zip elmq.exe
+        shell: bash
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: elmq-${{ github.ref_name }}-${{ matrix.target }}.*
+
+  homebrew:
+    name: Update Homebrew formula
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: caseyWebb/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Download release assets and update formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION_NUM="${VERSION#v}"
+
+          # Download all archives to compute checksums
+          gh release download "$VERSION" \
+            --repo caseyWebb/elmq \
+            --pattern "elmq-${VERSION}-*.tar.gz" \
+            --pattern "elmq-${VERSION}-*.zip" \
+            --dir /tmp/release
+
+          # Compute SHA256 checksums
+          SHA_LINUX_X86=$(sha256sum /tmp/release/elmq-${VERSION}-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_ARM=$(sha256sum /tmp/release/elmq-${VERSION}-aarch64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_X86=$(sha256sum /tmp/release/elmq-${VERSION}-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_ARM=$(sha256sum /tmp/release/elmq-${VERSION}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+
+          mkdir -p Formula
+
+          cat > Formula/elmq.rb << FORMULA
+          class Elmq < Formula
+            desc "Query and edit Elm files — like jq for Elm"
+            homepage "https://github.com/caseyWebb/elmq"
+            version "${VERSION_NUM}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/caseyWebb/elmq/releases/download/${VERSION}/elmq-${VERSION}-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_ARM}"
+              else
+                url "https://github.com/caseyWebb/elmq/releases/download/${VERSION}/elmq-${VERSION}-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_X86}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/caseyWebb/elmq/releases/download/${VERSION}/elmq-${VERSION}-aarch64-unknown-linux-musl.tar.gz"
+                sha256 "${SHA_LINUX_ARM}"
+              else
+                url "https://github.com/caseyWebb/elmq/releases/download/${VERSION}/elmq-${VERSION}-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "${SHA_LINUX_X86}"
+              end
+            end
+
+            def install
+              bin.install "elmq"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/elmq --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' Formula/elmq.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/elmq.rb
+          git commit -m "elmq ${{ github.ref_name }}"
+          git push

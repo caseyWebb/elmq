@@ -10,7 +10,7 @@ update-when: build steps, test commands, or dev setup changes
 2. Clone the repo and install the toolchain:
 
 ```sh
-git clone https://github.com/user/elmq.git
+git clone https://github.com/caseyWebb/elmq.git
 cd elmq
 mise install
 ```
@@ -18,10 +18,12 @@ mise install
 ## Development
 
 ```sh
-cargo build          # compile
-cargo test           # run tests
-cargo clippy         # lint
-cargo fmt --check    # check formatting
+mise run build       # compile release binary
+mise run test        # run tests
+mise run lint        # clippy
+mise run fmt         # auto-format
+mise run fmt:check   # check formatting
+mise run check       # all checks (fmt, lint, test)
 ```
 
 ## Project Structure
@@ -47,7 +49,8 @@ Test fixtures are in `test-fixtures/`. When adding parser features, add or updat
 
 ## Code Style
 
-- Run `cargo fmt` before committing
-- All clippy warnings must be clean (`cargo clippy`)
+- Run `mise run fmt` before committing
+- All clippy warnings must be clean (`mise run lint`)
+- PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g. `feat: add parser option`, `fix: handle empty files`) — PRs are squash-merged using the title as the commit message
 - Keep functions small and focused
 - No unnecessary abstractions — prefer straightforward code

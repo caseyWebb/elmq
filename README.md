@@ -12,11 +12,19 @@ Designed as a next-gen LSP for agents and scripts, not editors. Optimized for to
 
 ## Install
 
+### Homebrew
+
+```sh
+brew install caseyWebb/tap/elmq
+```
+
+### From source
+
 Requires Rust. If you use [mise](https://mise.jdx.dev/):
 
 ```sh
 mise install
-cargo install --path .
+mise run install
 ```
 
 ## Usage
