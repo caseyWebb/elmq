@@ -1,5 +1,5 @@
 [tools]
-rust = "1.93.0"
+rust = { version = "1.94.1", components = "rustfmt,clippy" }
 
 [tasks.build]
 description = "Build release binary"

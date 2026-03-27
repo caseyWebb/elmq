@@ -39,14 +39,16 @@ Linux binaries are statically linked (musl) for maximum portability.
 
 ## Required Secrets
 
-The release workflow requires a `HOMEBREW_TAP_TOKEN` repository secret — a fine-grained GitHub personal access token with **Contents: Read and write** permission scoped to the `caseyWebb/homebrew-tap` repository.
+One repository secret is needed at https://github.com/caseyWebb/elmq/settings/secrets/actions:
 
-To create:
+### `RELEASE_TOKEN`
+
+A single fine-grained GitHub personal access token used by release-please (to create PRs/releases that trigger downstream workflows) and the release workflow (to push Homebrew formula updates).
 
 1. Go to [GitHub Settings > Developer settings > Fine-grained tokens](https://github.com/settings/tokens?type=beta)
-2. Create a token with repository access to `caseyWebb/homebrew-tap` only
-3. Grant **Contents: Read and write** permission
-4. Add it as a repository secret named `HOMEBREW_TAP_TOKEN` at https://github.com/caseyWebb/elmq/settings/secrets/actions
+2. Create a token with repository access to **both** `caseyWebb/elmq` and `caseyWebb/homebrew-tap`
+3. Grant permissions: **Contents: Read and write**, **Pull requests: Read and write**
+4. Add it as a repository secret named `RELEASE_TOKEN` at https://github.com/caseyWebb/elmq/settings/secrets/actions
 
 ## Branch Protection
 

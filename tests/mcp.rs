@@ -102,7 +102,10 @@ fn server_initialize() {
     let resp: Value = serde_json::from_str(&resp_line).unwrap();
 
     assert_eq!(resp["result"]["serverInfo"]["name"], "elmq");
-    assert_eq!(resp["result"]["serverInfo"]["version"], "0.1.0");
+    assert_eq!(
+        resp["result"]["serverInfo"]["version"],
+        env!("CARGO_PKG_VERSION")
+    );
     assert!(resp["result"]["capabilities"]["tools"].is_object());
 
     drop(stdin);

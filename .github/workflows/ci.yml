@@ -16,6 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
+        with:
+          cache_key_prefix: mise-v1
       - run: mise run fmt:check
 
   lint:
@@ -24,6 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
+        with:
+          cache_key_prefix: mise-v1
       - run: mise run lint
 
   test:
@@ -35,6 +39,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
+        with:
+          cache_key_prefix: mise-v1
       - run: mise run test
 
   pr-title:
