@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Cli, Command, Format, ImportCommand};
 use elmq::parser;
+use elmq::project;
 use elmq::writer;
 use elmq::{Declaration, DeclarationKind, FileSummary};
 use std::io::Read;
@@ -112,6 +113,52 @@ fn main() -> Result<()> {
             let (source, summary) = load_and_parse(&file)?;
             let result = writer::unexpose(&source, &summary, &item)?;
             writer::atomic_write(&file, &result)?;
+        }
+        Command::Mv {
+            file,
+            new_path,
+            format,
+            dry_run,
+        } => {
+            let old_path = file
+                .canonicalize()
+                .with_context(|| format!("file not found: {}", file.display()))?;
+
+            // For CLI, create parent dirs before resolving (so canonicalize works).
+            if !dry_run
+                && let Some(parent) = new_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("could not create directory: {}", parent.display()))?;
+            }
+
+            let resolved_new = project::resolve_new_path(&new_path)?;
+            let result = project::execute_mv(&old_path, &resolved_new, dry_run)?;
+
+            match format {
+                Format::Compact => {
+                    let prefix = if dry_run { "(dry run) " } else { "" };
+                    println!(
+                        "{prefix}renamed {} -> {}",
+                        result.old_display, result.new_display
+                    );
+                    for f in &result.updated_files {
+                        println!("{prefix}updated {f}");
+                    }
+                }
+                Format::Json => {
+                    let json = serde_json::json!({
+                        "dry_run": dry_run,
+                        "renamed": {
+                            "from": result.old_display,
+                            "to": result.new_display,
+                        },
+                        "updated": result.updated_files,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json)?);
+                }
+            }
         }
         Command::Mcp => {
             tokio::runtime::Runtime::new()
