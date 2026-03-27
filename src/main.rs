@@ -2,9 +2,11 @@ mod cli;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Command, Format};
+use cli::{Cli, Command, Format, ImportCommand};
 use elmq::parser;
+use elmq::writer;
 use elmq::{Declaration, DeclarationKind, FileSummary};
+use std::io::Read;
 use std::path::Path;
 
 fn load_and_parse(file: &Path) -> Result<(String, FileSummary)> {
@@ -19,6 +21,14 @@ fn load_and_parse(file: &Path) -> Result<(String, FileSummary)> {
 
     let summary = parser::extract_summary(&tree, &source);
     Ok((source, summary))
+}
+
+fn read_stdin() -> Result<String> {
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .context("failed to read from stdin")?;
+    Ok(buf)
 }
 
 fn main() -> Result<()> {
@@ -49,6 +59,58 @@ fn main() -> Result<()> {
                 Format::Compact => println!("{decl_source}"),
                 Format::Json => print_get_json(decl, &decl_source)?,
             }
+        }
+        Command::Set { file, name } => {
+            let (source, summary) = load_and_parse(&file)?;
+            let new_source = read_stdin()?;
+
+            let decl_name = if let Some(name) = name {
+                name
+            } else {
+                parser::extract_declaration_name(&new_source).context(
+                    "could not parse declaration name from stdin (use --name to specify)",
+                )?
+            };
+
+            let result = writer::upsert_declaration(&source, &summary, &decl_name, &new_source);
+            writer::atomic_write(&file, &result)?;
+        }
+        Command::Patch {
+            file,
+            name,
+            old,
+            new,
+        } => {
+            let (source, summary) = load_and_parse(&file)?;
+            let result = writer::patch_declaration(&source, &summary, &name, &old, &new)?;
+            writer::atomic_write(&file, &result)?;
+        }
+        Command::Rm { file, name } => {
+            let (source, summary) = load_and_parse(&file)?;
+            let result = writer::remove_declaration(&source, &summary, &name)?;
+            writer::atomic_write(&file, &result)?;
+        }
+        Command::Import { command } => match command {
+            ImportCommand::Add { file, import } => {
+                let (source, summary) = load_and_parse(&file)?;
+                let result = writer::add_import(&source, &summary, &import);
+                writer::atomic_write(&file, &result)?;
+            }
+            ImportCommand::Remove { file, module_name } => {
+                let (source, _summary) = load_and_parse(&file)?;
+                let result = writer::remove_import(&source, &module_name)?;
+                writer::atomic_write(&file, &result)?;
+            }
+        },
+        Command::Expose { file, item } => {
+            let (source, summary) = load_and_parse(&file)?;
+            let result = writer::expose(&source, &summary, &item)?;
+            writer::atomic_write(&file, &result)?;
+        }
+        Command::Unexpose { file, item } => {
+            let (source, summary) = load_and_parse(&file)?;
+            let result = writer::unexpose(&source, &summary, &item)?;
+            writer::atomic_write(&file, &result)?;
         }
     }
 

@@ -163,6 +163,32 @@ fn extract_value_decl_name(node: &Node, source: &str) -> Option<String> {
     None
 }
 
+/// Extract the declaration name from a source string by parsing it.
+/// Used by `set` to determine the name of the declaration being upserted.
+pub fn extract_declaration_name(source: &str) -> Option<String> {
+    let tree = parse(source).ok()?;
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        match child.kind() {
+            "type_annotation" => {
+                return node_field_text(&child, "name", source);
+            }
+            "value_declaration" => {
+                return extract_value_decl_name(&child, source);
+            }
+            "type_declaration" | "type_alias_declaration" => {
+                return node_field_text(&child, "name", source);
+            }
+            "port_annotation" => {
+                return node_field_text(&child, "name", source);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn find_doc_comment<'a>(
     children: &[Node<'a>],
     decl_index: usize,
@@ -325,5 +351,52 @@ port sendMessage : String -> Cmd msg
         let summary = extract_summary(&tree, SAMPLE_ELM);
 
         assert!(summary.find_declaration("nonExistent").is_none());
+    }
+
+    #[test]
+    fn test_extract_declaration_name_function() {
+        assert_eq!(
+            extract_declaration_name(
+                "update : Msg -> Model -> Model\nupdate msg model =\n    model"
+            ),
+            Some("update".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_declaration_name_type() {
+        assert_eq!(
+            extract_declaration_name("type Msg\n    = Increment\n    | Decrement"),
+            Some("Msg".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_declaration_name_type_alias() {
+        assert_eq!(
+            extract_declaration_name("type alias Model =\n    { count : Int }"),
+            Some("Model".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_declaration_name_port() {
+        assert_eq!(
+            extract_declaration_name("port sendMessage : String -> Cmd msg"),
+            Some("sendMessage".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_declaration_name_value_no_annotation() {
+        assert_eq!(
+            extract_declaration_name("helper x =\n    x + 1"),
+            Some("helper".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_declaration_name_unparseable() {
+        assert_eq!(extract_declaration_name("not valid elm at all {{{"), None);
     }
 }

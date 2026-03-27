@@ -8,7 +8,7 @@ A CLI and MCP server for querying and editing Elm files — like jq for Elm.
 
 Designed as a next-gen LSP for agents and scripts, not editors. Optimized for token efficiency and structured tool calling.
 
-> **Status:** Early development. Currently supports listing and extracting declarations from Elm files. See [ROADMAP.md](ROADMAP.md) for what's planned.
+> **Status:** Active development. Supports reading and writing Elm declarations, imports, and module lines. See [ROADMAP.md](ROADMAP.md) for what's planned.
 
 ## Install
 
@@ -84,6 +84,54 @@ update msg model =
 ```
 
 Includes doc comments and type annotations when present. Returns non-zero exit code if the declaration is not found.
+
+### Upsert a declaration
+
+```sh
+echo 'helper x =
+    x + 42' | elmq set src/Main.elm
+```
+
+Reads a full declaration from stdin, parses the name, and replaces the existing declaration (or appends if new). Use `--name` to override:
+
+```sh
+echo 'renamed x = x + 1' | elmq set src/Main.elm --name helper
+```
+
+### Patch a declaration
+
+```sh
+elmq patch src/Main.elm update --old "model.count + 1" --new "model.count + 2"
+```
+
+Surgical find-and-replace scoped to a single declaration. The `--old` string must match exactly once.
+
+### Remove a declaration
+
+```sh
+elmq rm src/Main.elm helper
+```
+
+Removes the declaration, its type annotation, and doc comment. Cleans up excess blank lines.
+
+### Manage imports
+
+```sh
+elmq import add src/Main.elm "Browser exposing (element)"
+elmq import remove src/Main.elm Html
+```
+
+`import add` inserts in alphabetical order or replaces an existing import with the same module name.
+
+### Manage exposing list
+
+```sh
+elmq expose src/Main.elm update
+elmq expose src/Main.elm "Msg(..)"
+elmq unexpose src/Main.elm helper
+```
+
+Granularly add or remove items from the module's exposing list. If the module has `exposing (..)`, `unexpose` auto-expands to an explicit list then removes the target. `expose` is a no-op when `exposing (..)`. Neither command ever produces `exposing (..)`.
 
 ### JSON output
 

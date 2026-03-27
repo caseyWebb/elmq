@@ -25,13 +25,15 @@ Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scri
 - ~~`list-modules`~~ — deferred (agents find files effectively; not needed yet)
 - `get` — extract the full source text of a declaration by name
 
-## Phase 2: Write Tools
+## Phase 2: Write Tools ✓
 
-- `upsert-declaration` — replace or append a top-level declaration (full source)
-- `edit-declaration` — apply old/new diff within a declaration
-- `add-import` / `remove-import`
-- `set-exposing` / `set-module`
-- Round-trip formatting preservation (comments, whitespace)
+- `set` — upsert a top-level declaration (full source from stdin, name parsed or `--name` override)
+- `patch` — surgical `--old`/`--new` find-and-replace scoped to a declaration
+- `rm` — remove a declaration (including doc comment and type annotation)
+- `import add` / `import remove` — manage import clauses
+- `expose` / `unexpose` — granularly manage module exposing list
+- Round-trip formatting preservation (comments, whitespace outside edited region)
+- Atomic file writes (write-to-temp, rename-over-original)
 
 ## Phase 3: MCP Server
 
@@ -42,6 +44,7 @@ Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scri
 ## Phase 4: Multi-File Operations
 
 - Project-aware mode (elm.json, source-directories)
+- `mv` — rename a module and update import sites across the project
 - Cross-file queries (who exposes X, who imports Y)
 - Propagating edits (add type constructor → update case expressions at all use sites)
 

@@ -31,17 +31,18 @@ src/
 ├── main.rs       # CLI entry point, output formatting
 ├── cli.rs        # clap argument definitions
 ├── lib.rs        # public types (Declaration, DeclarationKind)
-└── parser.rs     # tree-sitter-elm parsing and declaration extraction
+├── parser.rs     # tree-sitter-elm parsing and declaration extraction
+└── writer.rs     # write operations (upsert, patch, rm, imports, module)
 ```
 
-- `lib.rs` + `parser.rs` contain all core logic, testable without the CLI
+- `lib.rs` + `parser.rs` + `writer.rs` contain all core logic, testable without the CLI
 - `main.rs` is a thin wrapper that wires CLI args to library functions
 
 ## Testing
 
-Unit tests live alongside the code in `parser.rs`. Run with `cargo test`.
+Unit tests live alongside the code in `parser.rs`. Integration tests are in `tests/` with one file per command (`get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `module.rs`). Run with `cargo test`.
 
-Test fixtures are in `test-fixtures/`. When adding parser features, add or update the sample Elm files there and write corresponding tests.
+Test fixtures are in `test-fixtures/`. When adding parser features, add or update the sample Elm files there and write corresponding tests. Integration tests use `tempfile` to create temporary copies for write operations.
 
 ## Code Style
 
