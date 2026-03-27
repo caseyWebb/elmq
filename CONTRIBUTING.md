@@ -1,3 +1,7 @@
+---
+update-when: build steps, test commands, or dev setup changes
+---
+
 # Contributing
 
 ## Setup

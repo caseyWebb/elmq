@@ -1,3 +1,7 @@
+---
+update-when: features are completed or new phases are planned
+---
+
 # elmq Roadmap
 
 Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scripts, optimized for token efficiency.

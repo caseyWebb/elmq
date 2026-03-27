@@ -1,3 +1,7 @@
+---
+update-when: CLI commands, output format, or installation steps change
+---
+
 # elmq
 
 A CLI and MCP server for querying and editing Elm files — like jq for Elm.
