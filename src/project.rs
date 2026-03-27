@@ -195,12 +195,9 @@ pub fn execute_mv(old_path: &Path, resolved_new: &Path, dry_run: bool) -> Result
                 if !dry_run {
                     writer::atomic_write(elm_file, &new_source)?;
                 }
-                let display_path = elm_file
-                    .strip_prefix(&project.root)
-                    .unwrap_or(elm_file)
-                    .display()
-                    .to_string();
-                updated_files.push(display_path);
+                updated_files.push(display_path(
+                    elm_file.strip_prefix(&project.root).unwrap_or(elm_file),
+                ));
             }
         }
     }
@@ -250,22 +247,26 @@ pub fn execute_mv(old_path: &Path, resolved_new: &Path, dry_run: bool) -> Result
         }
     }
 
-    let old_display = old_path
-        .strip_prefix(&project.root)
-        .unwrap_or(old_path)
-        .display()
-        .to_string();
-    let new_display = resolved_new
-        .strip_prefix(&project.root)
-        .unwrap_or(resolved_new)
-        .display()
-        .to_string();
+    let old_display = display_path(old_path.strip_prefix(&project.root).unwrap_or(old_path));
+    let new_display = display_path(
+        resolved_new
+            .strip_prefix(&project.root)
+            .unwrap_or(resolved_new),
+    );
 
     Ok(MvResult {
         old_display,
         new_display,
         updated_files,
     })
+}
+
+/// Format a path for display, always using forward slashes for cross-platform consistency.
+fn display_path(path: &Path) -> String {
+    path.components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Resolve a new file path for mv: canonicalize the parent directory, append filename.
