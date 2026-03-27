@@ -1,6 +1,8 @@
 use crate::FileSummary;
+use crate::parser;
 use anyhow::{Context, Result, bail};
 use std::path::Path;
+use tree_sitter::Node;
 
 /// Write content to a file atomically: write to a temp file in the same
 /// directory, then rename over the original.
@@ -418,6 +420,120 @@ fn find_import_range(lines: &[&str]) -> (usize, usize) {
     (start.unwrap_or(0), end)
 }
 
+/// Rewrite all references to `old_module` as `new_module` in the given source.
+/// Handles import clauses, qualified value references, and qualified type references.
+/// Uses tree-sitter to avoid modifying strings or comments.
+pub fn rename_module_references(source: &str, old_module: &str, new_module: &str) -> String {
+    let tree = match parser::parse(source) {
+        Ok(t) => t,
+        Err(_) => return source.to_string(),
+    };
+
+    let root = tree.root_node();
+    let mut replacements: Vec<(usize, usize, &str)> = Vec::new();
+
+    collect_module_replacements(&root, source, old_module, new_module, &mut replacements);
+
+    if replacements.is_empty() {
+        return source.to_string();
+    }
+
+    // Sort by start byte descending so we can apply back-to-front.
+    replacements.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut result = source.to_string();
+    for (start, end, replacement) in replacements {
+        result.replace_range(start..end, replacement);
+    }
+    result
+}
+
+fn collect_module_replacements<'a>(
+    node: &Node,
+    source: &str,
+    old_module: &str,
+    new_module: &'a str,
+    replacements: &mut Vec<(usize, usize, &'a str)>,
+) {
+    match node.kind() {
+        "import_clause" => {
+            if let Some(module_name_node) = node.child_by_field_name("moduleName")
+                && let Ok(text) = module_name_node.utf8_text(source.as_bytes())
+                && text == old_module
+            {
+                replacements.push((
+                    module_name_node.start_byte(),
+                    module_name_node.end_byte(),
+                    new_module,
+                ));
+            }
+            return;
+        }
+        "module_declaration" => {
+            // Skip — module declaration is handled by rename_module_declaration.
+            return;
+        }
+        "value_qid" => {
+            // Qualified value like Foo.Bar.baz — check if module prefix matches.
+            if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                let prefix = format!("{old_module}.");
+                if text.starts_with(&prefix) {
+                    replacements.push((
+                        node.start_byte(),
+                        node.start_byte() + old_module.len(),
+                        new_module,
+                    ));
+                }
+            }
+            return;
+        }
+        "upper_case_qid" => {
+            // Qualified type like Foo.Bar.Model — check if module prefix matches.
+            // Skip single identifiers (no dots = no module qualification).
+            if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                let prefix = format!("{old_module}.");
+                if text.starts_with(&prefix) {
+                    replacements.push((
+                        node.start_byte(),
+                        node.start_byte() + old_module.len(),
+                        new_module,
+                    ));
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+
+    // Recurse into children.
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_module_replacements(&child, source, old_module, new_module, replacements);
+    }
+}
+
+/// Update the module declaration to use a new module name.
+/// Preserves the exposing list exactly as-is.
+pub fn rename_module_declaration(source: &str, new_name: &str) -> Result<String> {
+    let tree = parser::parse(source)?;
+    let root = tree.root_node();
+
+    let module_decl = root
+        .child_by_field_name("moduleDeclaration")
+        .with_context(|| "no module declaration found")?;
+
+    let name_node = module_decl
+        .child_by_field_name("name")
+        .with_context(|| "module declaration has no name")?;
+
+    let start = name_node.start_byte();
+    let end = name_node.end_byte();
+
+    let mut result = source.to_string();
+    result.replace_range(start..end, new_name);
+    Ok(result)
+}
+
 fn collapse_blank_lines(source: &str) -> Result<String> {
     let mut result = String::new();
     let mut blank_count = 0;
@@ -434,4 +550,96 @@ fn collapse_blank_lines(source: &str) -> Result<String> {
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rename_import() {
+        let source = "module Main exposing (..)\n\nimport Foo.Bar exposing (baz)\nimport Other\n\nmain = baz\n";
+        let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
+        assert!(result.contains("import Foo.Baz exposing (baz)"));
+        assert!(result.contains("import Other"));
+    }
+
+    #[test]
+    fn test_rename_import_with_alias() {
+        let source =
+            "module Main exposing (..)\n\nimport Foo.Bar as FB exposing (baz)\n\nmain = baz\n";
+        let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
+        assert!(result.contains("import Foo.Baz as FB exposing (baz)"));
+    }
+
+    #[test]
+    fn test_rename_qualified_value() {
+        let source =
+            "module Main exposing (..)\n\nimport Foo.Bar\n\nmain = Foo.Bar.baz + Foo.Bar.qux\n";
+        let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
+        assert!(result.contains("Foo.Baz.baz"));
+        assert!(result.contains("Foo.Baz.qux"));
+        assert!(!result.contains("Foo.Bar"));
+    }
+
+    #[test]
+    fn test_rename_qualified_type() {
+        let source =
+            "module Main exposing (..)\n\nimport Foo.Bar\n\ntype alias Model = Foo.Bar.Model\n";
+        let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
+        assert!(result.contains("Foo.Baz.Model"));
+        assert!(result.contains("import Foo.Baz"));
+    }
+
+    #[test]
+    fn test_rename_preserves_unrelated() {
+        let source =
+            "module Main exposing (..)\n\nimport Other.Module\n\nmain = Other.Module.foo\n";
+        let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
+        assert_eq!(result, source);
+    }
+
+    #[test]
+    fn test_rename_does_not_touch_strings() {
+        let source = "module Main exposing (..)\n\nmain = \"Foo.Bar.baz\"\n";
+        let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
+        assert!(result.contains("\"Foo.Bar.baz\""));
+    }
+
+    #[test]
+    fn test_rename_does_not_touch_comments() {
+        let source = "module Main exposing (..)\n\n-- See Foo.Bar for details\nmain = 1\n";
+        let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
+        assert!(result.contains("-- See Foo.Bar for details"));
+    }
+
+    #[test]
+    fn test_rename_module_declaration_simple() {
+        let source = "module Foo.Bar exposing (baz, Model)\n\nbaz = 1\n";
+        let result = rename_module_declaration(source, "Foo.Baz").unwrap();
+        assert!(result.starts_with("module Foo.Baz exposing (baz, Model)"));
+    }
+
+    #[test]
+    fn test_rename_port_module_declaration() {
+        let source = "port module Foo.Bar exposing (..)\n\nport send : String -> Cmd msg\n";
+        let result = rename_module_declaration(source, "Foo.Baz").unwrap();
+        assert!(result.starts_with("port module Foo.Baz exposing (..)"));
+    }
+
+    #[test]
+    fn test_rename_no_match_returns_unchanged() {
+        let source = "module Main exposing (..)\n\nimport Other\n\nmain = 1\n";
+        let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
+        assert_eq!(result, source);
+    }
+
+    #[test]
+    fn test_rename_partial_module_name_no_match() {
+        // "Foo.Barista" should NOT match when renaming "Foo.Bar"
+        let source = "module Main exposing (..)\n\nimport Foo.Barista\n\nmain = Foo.Barista.make\n";
+        let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
+        assert!(result.contains("Foo.Barista"));
+        assert!(!result.contains("Foo.Baz"));
+    }
 }

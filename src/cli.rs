@@ -89,6 +89,22 @@ pub enum Command {
         /// Item to unexpose (e.g. "helper")
         item: String,
     },
+    /// Rename a module: move file and update all imports and qualified references
+    Mv {
+        /// Path to the Elm file to rename
+        file: PathBuf,
+
+        /// New file path
+        new_path: PathBuf,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Compact)]
+        format: Format,
+
+        /// Preview changes without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Start MCP server (stdio transport)
     Mcp,
 }

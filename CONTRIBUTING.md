@@ -33,15 +33,16 @@ src/
 ├── lib.rs        # public types (Declaration, DeclarationKind)
 ├── mcp.rs        # MCP stdio server (rmcp SDK, 4 tools)
 ├── parser.rs     # tree-sitter-elm parsing and declaration extraction
-└── writer.rs     # write operations (upsert, patch, rm, imports, module)
+├── project.rs    # project discovery (elm.json, source-directories, module resolution)
+└── writer.rs     # write operations (upsert, patch, rm, imports, module, rename)
 ```
 
-- `lib.rs` + `parser.rs` + `writer.rs` contain all core logic, testable without the CLI
+- `lib.rs` + `parser.rs` + `writer.rs` + `project.rs` contain all core logic, testable without the CLI
 - `main.rs` is a thin wrapper that wires CLI args to library functions
 
 ## Testing
 
-Unit tests live alongside the code in `parser.rs`. Integration tests are in `tests/` with one file per command (`get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mcp.rs`). Run with `cargo test`.
+Unit tests live alongside the code in `parser.rs`, `writer.rs`, and `project.rs`. Integration tests are in `tests/` with one file per command (`get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `mcp.rs`). Run with `cargo test`.
 
 Test fixtures are in `test-fixtures/`. When adding parser features, add or update the sample Elm files there and write corresponding tests. Integration tests use `tempfile` to create temporary copies for write operations.
 

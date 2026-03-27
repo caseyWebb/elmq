@@ -140,6 +140,20 @@ elmq unexpose src/Main.elm helper
 
 Granularly add or remove items from the module's exposing list. If the module has `exposing (..)`, `unexpose` auto-expands to an explicit list then removes the target. `expose` is a no-op when `exposing (..)`. Neither command ever produces `exposing (..)`.
 
+### Rename/move a module
+
+```sh
+elmq mv src/Foo/Bar.elm src/Foo/Baz.elm
+```
+
+```
+renamed src/Foo/Bar.elm -> src/Foo/Baz.elm
+updated src/Main.elm
+updated src/Page/Home.elm
+```
+
+Renames the file, updates the module declaration, and rewrites all imports and qualified references (`Foo.Bar.something` -> `Foo.Baz.something`) across the project. Requires `elm.json` in a parent directory. Use `--dry-run` to preview changes without writing.
+
 ### JSON output
 
 ```sh
@@ -176,7 +190,7 @@ Exposes 4 tools optimized for LLM agents:
 |------|-------------|
 | `elm_summary` | File overview: module, imports, declarations with types and line numbers |
 | `elm_get` | Extract full source text of a declaration by name |
-| `elm_edit` | Modify declarations: `set` (upsert), `patch` (find-replace), `rm` (remove) |
+| `elm_edit` | Modify declarations: `set` (upsert), `patch` (find-replace), `rm` (remove), `mv` (rename module across project) |
 | `elm_module` | Manage imports and exposing list: `add_import`, `remove_import`, `expose`, `unexpose` |
 
 Configure in your MCP client (e.g. Claude Code `settings.json`):

@@ -42,10 +42,10 @@ Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scri
 - Tool descriptions optimized for token efficiency
 - Compact output as default for MCP responses
 
-## Phase 4: Multi-File Operations
+## Phase 4: Multi-File Operations (in progress)
 
-- Project-aware mode (elm.json, source-directories)
-- `mv` — rename a module and update import sites across the project
+- Project-aware mode (elm.json, source-directories) ✓
+- `mv` — rename a module and update imports and qualified references across the project ✓
 - Cross-file queries (who exposes X, who imports Y)
 - Propagating edits (add type constructor → update case expressions at all use sites)
 

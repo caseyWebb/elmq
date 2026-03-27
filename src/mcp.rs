@@ -79,6 +79,8 @@ pub enum EditAction {
     Patch,
     /// Remove a declaration
     Rm,
+    /// Rename/move a module file and update all imports and qualified references across the project
+    Mv,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -95,6 +97,10 @@ pub struct EditParams {
     pub old: Option<String>,
     /// Replacement text (required for "patch")
     pub new: Option<String>,
+    /// New file path for the module (required for "mv")
+    pub new_path: Option<String>,
+    /// If true, preview changes without writing (optional for "mv")
+    pub dry_run: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -307,7 +313,7 @@ impl ElmqServer {
 
     #[tool(
         name = "elm_edit",
-        description = "Modify a declaration in an Elm file. Actions: \"set\" (upsert declaration from source text), \"patch\" (find-and-replace within a declaration), \"rm\" (remove a declaration). File is written atomically."
+        description = "Modify an Elm file. Actions: \"set\" (upsert declaration from source text), \"patch\" (find-and-replace within a declaration), \"rm\" (remove a declaration), \"mv\" (rename/move a module, updating all imports and qualified references across the project). File writes are atomic."
     )]
     fn elm_edit(&self, Parameters(params): Parameters<EditParams>) -> Result<String, String> {
         let (source, summary) = load_and_parse(&params.file)?;
@@ -361,6 +367,7 @@ impl ElmqServer {
                 writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("removed {name} from {}", params.file))
             }
+            EditAction::Mv => self.handle_mv(&params),
         }
     }
 
@@ -416,6 +423,58 @@ impl ElmqServer {
                 Ok(format!("unexposed {item} in {}", params.file))
             }
         }
+    }
+}
+
+impl ElmqServer {
+    fn handle_mv(&self, params: &EditParams) -> Result<String, String> {
+        let new_path_str = params
+            .new_path
+            .as_deref()
+            .ok_or("\"new_path\" is required for action \"mv\"")?;
+        let dry_run = params.dry_run.unwrap_or(false);
+
+        let old_path = validate_path(&params.file)?;
+
+        // Resolve new path relative to CWD, then validate it's within CWD.
+        let cwd = std::env::current_dir().map_err(|e| format!("could not determine cwd: {e}"))?;
+        let canonical_cwd = cwd.canonicalize().map_err(|e| format!("cwd error: {e}"))?;
+
+        let new_path_raw = Path::new(new_path_str);
+        let new_path_abs = if new_path_raw.is_absolute() {
+            new_path_raw.to_path_buf()
+        } else {
+            cwd.join(new_path_raw)
+        };
+
+        // Create parent dirs only if not dry_run, then resolve.
+        if !dry_run && let Some(parent) = new_path_abs.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("could not create directory: {e}"))?;
+        }
+
+        let resolved_new = elmq::project::resolve_new_path(&new_path_abs)
+            .map_err(|e| format!("invalid new path: {e}"))?;
+
+        // Validate new path is within CWD BEFORE any operations.
+        if !resolved_new.starts_with(&canonical_cwd) {
+            return Err(format!(
+                "new path \"{new_path_str}\" resolves outside the working directory"
+            ));
+        }
+
+        let result = elmq::project::execute_mv(&old_path, &resolved_new, dry_run)
+            .map_err(|e| e.to_string())?;
+
+        let json = serde_json::json!({
+            "dry_run": dry_run,
+            "renamed": {
+                "from": result.old_display,
+                "to": result.new_display,
+            },
+            "updated": result.updated_files,
+        });
+        serde_json::to_string_pretty(&json).map_err(|e| format!("JSON error: {e}"))
     }
 }
 

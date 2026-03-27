@@ -469,6 +469,172 @@ fn module_invalid_action() {
     assert!(resp.get("error").is_some() || is_error(&resp));
 }
 
+// -- elm_edit mv tests --
+
+fn call_tool_in_dir(dir: &std::path::Path, name: &str, args: Value) -> Value {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_elmq"))
+        .arg("mcp")
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to start elmq mcp");
+
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+
+    let init = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1.0"}
+        }
+    });
+    writeln!(stdin, "{}", serde_json::to_string(&init).unwrap()).unwrap();
+    let mut init_resp = String::new();
+    reader.read_line(&mut init_resp).unwrap();
+
+    let initialized = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    });
+    writeln!(stdin, "{}", serde_json::to_string(&initialized).unwrap()).unwrap();
+
+    let tool_call = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": name,
+            "arguments": args
+        }
+    });
+    writeln!(stdin, "{}", serde_json::to_string(&tool_call).unwrap()).unwrap();
+
+    let mut resp_line = String::new();
+    reader.read_line(&mut resp_line).unwrap();
+
+    drop(stdin);
+    let _ = child.wait();
+
+    serde_json::from_str(&resp_line).expect("invalid JSON response")
+}
+
+fn create_project(root: &std::path::Path, source_dirs: &[&str]) {
+    let sd_json: Vec<String> = source_dirs.iter().map(|s| format!("\"{s}\"")).collect();
+    let elm_json = format!(
+        r#"{{"type": "application", "source-directories": [{}], "elm-version": "0.19.1", "dependencies": {{}}}}"#,
+        sd_json.join(", ")
+    );
+    std::fs::write(root.join("elm.json"), elm_json).unwrap();
+    for sd in source_dirs {
+        std::fs::create_dir_all(root.join(sd)).unwrap();
+    }
+}
+
+fn write_elm(root: &std::path::Path, rel_path: &str, content: &str) {
+    let path = root.join(rel_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, content).unwrap();
+}
+
+#[test]
+fn edit_mv_renames_module() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+
+    write_elm(
+        root,
+        "src/Foo/Bar.elm",
+        "module Foo.Bar exposing (baz)\n\nbaz = 1\n",
+    );
+    write_elm(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nimport Foo.Bar exposing (baz)\n\nmain = baz\n",
+    );
+
+    let resp = call_tool_in_dir(
+        root,
+        "elm_edit",
+        serde_json::json!({
+            "file": "src/Foo/Bar.elm",
+            "action": "mv",
+            "new_path": "src/Foo/Baz.elm"
+        }),
+    );
+    assert!(!is_error(&resp), "error: {}", result_text(&resp));
+
+    let text = result_text(&resp);
+    let parsed: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["renamed"]["to"], "src/Foo/Baz.elm");
+
+    assert!(!root.join("src/Foo/Bar.elm").exists());
+    assert!(root.join("src/Foo/Baz.elm").exists());
+
+    let new_content = std::fs::read_to_string(root.join("src/Foo/Baz.elm")).unwrap();
+    assert!(new_content.contains("module Foo.Baz exposing (baz)"));
+
+    let main_content = std::fs::read_to_string(root.join("src/Main.elm")).unwrap();
+    assert!(main_content.contains("import Foo.Baz exposing (baz)"));
+}
+
+#[test]
+fn edit_mv_dry_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+
+    write_elm(root, "src/Foo.elm", "module Foo exposing (..)\n\nfoo = 1\n");
+
+    let resp = call_tool_in_dir(
+        root,
+        "elm_edit",
+        serde_json::json!({
+            "file": "src/Foo.elm",
+            "action": "mv",
+            "new_path": "src/Bar.elm",
+            "dry_run": true
+        }),
+    );
+    assert!(!is_error(&resp), "error: {}", result_text(&resp));
+
+    let text = result_text(&resp);
+    let parsed: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["dry_run"], true);
+
+    // Files unchanged.
+    assert!(root.join("src/Foo.elm").exists());
+    assert!(!root.join("src/Bar.elm").exists());
+}
+
+#[test]
+fn edit_mv_missing_new_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(root, "src/Foo.elm", "module Foo exposing (..)\n\nfoo = 1\n");
+
+    let resp = call_tool_in_dir(
+        root,
+        "elm_edit",
+        serde_json::json!({
+            "file": "src/Foo.elm",
+            "action": "mv"
+        }),
+    );
+    assert!(is_error(&resp));
+    assert!(result_text(&resp).contains("new_path"));
+}
+
 // -- Path traversal tests --
 
 #[test]
