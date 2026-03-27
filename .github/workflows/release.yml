@@ -82,11 +82,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: caseyWebb/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Download release assets and update formula
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           VERSION: ${{ github.ref_name }}
         run: |
           VERSION_NUM="${VERSION#v}"
