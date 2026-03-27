@@ -20,11 +20,10 @@ brew install caseyWebb/tap/elmq
 
 ### From source
 
-Requires Rust. If you use [mise](https://mise.jdx.dev/):
+Requires [Rust](https://rustup.rs/):
 
 ```sh
-mise install
-mise run install
+cargo install --path .
 ```
 
 ## Usage

@@ -12,21 +12,18 @@ A Rust CLI and MCP server for querying and editing Elm files — like jq for Elm
 
 ## Build & Test Commands
 
-All commands go through mise:
-
 ```sh
-mise run build       # compile release binary
-mise run test        # run all tests
-mise run lint        # clippy (must be warning-free)
-mise run fmt:check   # check formatting
-mise run fmt         # auto-format
-mise run check       # all of the above
-mise run install     # install locally
+cargo build --release --locked   # compile release binary
+cargo test                       # run all tests
+cargo clippy -- -D warnings      # lint (must be warning-free)
+cargo fmt --check                # check formatting
+cargo fmt                        # auto-format
+cargo install --path .           # install locally
 ```
 
 To run a single test: `cargo test <name>`
 
-Rust toolchain is managed via mise (`mise install` to set up).
+Rust toolchain is pinned in `rust-toolchain.toml` (rustup installs it automatically).
 
 ## Architecture
 
@@ -44,7 +41,7 @@ The library (`lib.rs` + `parser.rs` + `writer.rs`) is fully testable without the
 ## Conventions
 
 - Requires Rust edition 2024 (nightly features like let-chains are used)
-- Run `mise run fmt` before committing
+- Run `cargo fmt` before committing
 - PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/) (enforced by CI, used for squash merge commit messages)
 - Test fixtures go in `test-fixtures/`; add/update sample `.elm` files when adding parser features
 - `openspec/` contains spec-driven development artifacts (changes and specs)

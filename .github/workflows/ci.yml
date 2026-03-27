@@ -15,22 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v4
-        with:
-          cache_key_prefix: mise-v2
-      - run: rustup component add rustfmt
-      - run: mise run fmt:check
+      - run: cargo fmt --check
 
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v4
-        with:
-          cache_key_prefix: mise-v2
-      - run: rustup component add clippy
-      - run: mise run lint
+      - run: cargo clippy -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -40,10 +32,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v4
-        with:
-          cache_key_prefix: mise-v2
-      - run: mise run test
+      - run: cargo test
 
   pr-title:
     name: PR title
