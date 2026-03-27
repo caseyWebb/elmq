@@ -1,0 +1,88 @@
+### Requirement: elm_summary tool
+The system SHALL provide an `elm_summary` tool that returns a summary of an Elm file's structure including module declaration, imports, and all declarations grouped by kind.
+
+Parameters:
+- `file` (string, required): Path to the Elm file
+- `format` (string, optional): Output format — `compact` (default) or `json`
+- `docs` (boolean, optional): Include doc comments — default `false`
+
+#### Scenario: Compact summary
+- **WHEN** `elm_summary` is called with a valid Elm file path
+- **THEN** the tool SHALL return the file summary in compact text format matching `elmq list` output
+
+#### Scenario: JSON summary
+- **WHEN** `elm_summary` is called with `format` set to `json`
+- **THEN** the tool SHALL return the file summary as a JSON object matching `elmq list --format json` output
+
+### Requirement: elm_get tool
+The system SHALL provide an `elm_get` tool that extracts the full source text of a declaration by name.
+
+Parameters:
+- `file` (string, required): Path to the Elm file
+- `name` (string, required): Name of the declaration to extract
+- `format` (string, optional): Output format — `compact` (default) or `json`
+
+#### Scenario: Extract declaration source
+- **WHEN** `elm_get` is called with a valid file and declaration name
+- **THEN** the tool SHALL return the full source text of that declaration
+
+#### Scenario: Declaration not found
+- **WHEN** `elm_get` is called with a name that does not exist in the file
+- **THEN** the tool SHALL return an error indicating the declaration was not found
+
+### Requirement: elm_edit tool
+The system SHALL provide an `elm_edit` tool that performs declaration-level mutations. The `action` parameter determines the operation.
+
+Parameters:
+- `file` (string, required): Path to the Elm file
+- `action` (string, required): One of `set`, `patch`, `rm`
+- `source` (string, required for `set`): Full source text of the declaration to upsert
+- `name` (string, optional for `set`, required for `patch`/`rm`): Declaration name. For `set`, defaults to the name parsed from `source`.
+- `old` (string, required for `patch`): Text to find within the declaration
+- `new` (string, required for `patch`): Replacement text
+
+#### Scenario: Set (upsert) a declaration
+- **WHEN** `elm_edit` is called with `action: "set"` and `source` containing a declaration
+- **THEN** the tool SHALL upsert the declaration in the file (insert if new, replace if existing) and write the file atomically
+
+#### Scenario: Patch a declaration
+- **WHEN** `elm_edit` is called with `action: "patch"`, `name`, `old`, and `new`
+- **THEN** the tool SHALL find `old` within the named declaration and replace it with `new`, writing atomically
+
+#### Scenario: Remove a declaration
+- **WHEN** `elm_edit` is called with `action: "rm"` and `name`
+- **THEN** the tool SHALL remove the named declaration (including doc comment and type annotation) and write atomically
+
+#### Scenario: Write confirmation
+- **WHEN** any `elm_edit` action completes successfully
+- **THEN** the tool SHALL return a brief confirmation message (e.g., "set update in src/Main.elm")
+
+### Requirement: elm_module tool
+The system SHALL provide an `elm_module` tool that performs module-level mutations. The `action` parameter determines the operation.
+
+Parameters:
+- `file` (string, required): Path to the Elm file
+- `action` (string, required): One of `add_import`, `remove_import`, `expose`, `unexpose`
+- `import` (string, required for `add_import`): Import clause (e.g., `Html exposing (Html, div)`)
+- `module_name` (string, required for `remove_import`): Module name to remove (e.g., `Html`)
+- `item` (string, required for `expose`/`unexpose`): Item to expose or unexpose (e.g., `update` or `Msg(..)`)
+
+#### Scenario: Add an import
+- **WHEN** `elm_module` is called with `action: "add_import"` and an `import` clause
+- **THEN** the tool SHALL add or replace the import in the file and write atomically
+
+#### Scenario: Remove an import
+- **WHEN** `elm_module` is called with `action: "remove_import"` and a `module_name`
+- **THEN** the tool SHALL remove the import for that module and write atomically
+
+#### Scenario: Expose an item
+- **WHEN** `elm_module` is called with `action: "expose"` and an `item`
+- **THEN** the tool SHALL add the item to the module's exposing list and write atomically
+
+#### Scenario: Unexpose an item
+- **WHEN** `elm_module` is called with `action: "unexpose"` and an `item`
+- **THEN** the tool SHALL remove the item from the module's exposing list and write atomically
+
+#### Scenario: Write confirmation
+- **WHEN** any `elm_module` action completes successfully
+- **THEN** the tool SHALL return a brief confirmation message
