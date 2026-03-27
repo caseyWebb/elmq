@@ -16,6 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
+      - run: rustup component add rustfmt
       - run: mise run fmt:check
 
   lint:
@@ -24,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
+      - run: rustup component add clippy
       - run: mise run lint
 
   test:
