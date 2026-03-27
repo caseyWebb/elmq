@@ -473,7 +473,12 @@ fn module_invalid_action() {
 
 #[test]
 fn rejects_absolute_path_outside_cwd() {
-    let resp = call_tool("elm_summary", serde_json::json!({"file": "/etc/hosts"}));
+    let path = if cfg!(windows) {
+        r"C:\Windows\System32\drivers\etc\hosts"
+    } else {
+        "/etc/hosts"
+    };
+    let resp = call_tool("elm_summary", serde_json::json!({"file": path}));
     assert!(is_error(&resp));
     assert!(result_text(&resp).contains("outside the working directory"));
 }
