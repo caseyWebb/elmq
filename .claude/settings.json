@@ -11,6 +11,19 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "if": "Bash(git push:*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pr_url=$(gh pr view --json url -q .url 2>/dev/null); if [ -n \"$pr_url\" ]; then echo \"{\\\"hookSpecificOutput\\\":{\\\"hookEventName\\\":\\\"PostToolUse\\\",\\\"additionalContext\\\":\\\"You just pushed. A PR exists at $pr_url — consider whether the PR title and description need updating to reflect the latest changes.\\\"}}\"; fi",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

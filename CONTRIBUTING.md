@@ -6,24 +6,22 @@ update-when: build steps, test commands, or dev setup changes
 
 ## Setup
 
-1. Install [mise](https://mise.jdx.dev/)
-2. Clone the repo and install the toolchain:
+1. Install [Rust](https://rustup.rs/) via rustup
+2. Clone the repo (rustup will install the pinned toolchain automatically):
 
 ```sh
 git clone https://github.com/caseyWebb/elmq.git
 cd elmq
-mise install
 ```
 
 ## Development
 
 ```sh
-mise run build       # compile release binary
-mise run test        # run tests
-mise run lint        # clippy
-mise run fmt         # auto-format
-mise run fmt:check   # check formatting
-mise run check       # all checks (fmt, lint, test)
+cargo build --release --locked   # compile release binary
+cargo test                       # run tests
+cargo clippy -- -D warnings      # lint
+cargo fmt                        # auto-format
+cargo fmt --check                # check formatting
 ```
 
 ## Project Structure
@@ -49,8 +47,8 @@ Test fixtures are in `test-fixtures/`. When adding parser features, add or updat
 
 ## Code Style
 
-- Run `mise run fmt` before committing
-- All clippy warnings must be clean (`mise run lint`)
+- Run `cargo fmt` before committing
+- All clippy warnings must be clean (`cargo clippy -- -D warnings`)
 - PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g. `feat: add parser option`, `fix: handle empty files`) — PRs are squash-merged using the title as the commit message
 - Keep functions small and focused
 - No unnecessary abstractions — prefer straightforward code
