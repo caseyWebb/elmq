@@ -65,6 +65,14 @@ run_arm() {
         claude_base+=(--mcp-config "$MCP_CONFIG")
     elif [[ "$arm" == "treatment-plugin" ]]; then
         claude_base+=(--plugin-dir "$PLUGIN_DIR")
+        # Hooks may not fire in -p mode, so manually inject the hook guidance
+        local hook_output
+        hook_output=$(cd "$work_dir" && "$PLUGIN_DIR/hooks/session-start.sh" 2>/dev/null || true)
+        if [ -n "$hook_output" ]; then
+            local hook_file="$run_dir/hook-guidance.md"
+            echo "$hook_output" > "$hook_file"
+            claude_base+=(--append-system-prompt-file "$hook_file")
+        fi
     fi
 
     for scenario in "${SCENARIOS[@]}"; do
