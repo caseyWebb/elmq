@@ -54,7 +54,7 @@ run_arm() {
     local claude_base=(
         claude -p
         --model sonnet
-        --output-format json
+        --output-format stream-json
         --permission-mode bypassPermissions
         --system-prompt-file "$SYSTEM_PROMPT"
     )

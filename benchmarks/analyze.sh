@@ -13,7 +13,8 @@ SCENARIOS=(
 
 ARMS=("control" "treatment")
 
-# Extract token metrics from a session.json file
+# Extract token metrics from a session.json (stream-json format: one JSON object per line)
+# The result message (last line with type=result) contains usage data.
 # Returns: input_tokens output_tokens cache_read cache_create
 extract_tokens() {
     local file="$1"
@@ -21,29 +22,21 @@ extract_tokens() {
         echo "0 0 0 0"
         return
     fi
-    jq -r '
-        [.result.usage // .usage // {}] |
-        map({
-            input: (.input_tokens // 0),
-            output: (.output_tokens // 0),
-            cache_read: (.cache_read_input_tokens // 0),
-            cache_create: (.cache_creation_input_tokens // 0)
-        }) |
-        .[0] |
-        "\(.input) \(.output) \(.cache_read) \(.cache_create)"
-    ' "$file" 2>/dev/null || echo "0 0 0 0"
+    grep '"type":"result"' "$file" | tail -1 | jq -r '
+        (.usage // {}) |
+        "\(.input_tokens // 0) \(.output_tokens // 0) \(.cache_read_input_tokens // 0) \(.cache_creation_input_tokens // 0)"
+    ' 2>/dev/null || echo "0 0 0 0"
 }
 
-# Count tool calls in a session.json
+# Count tool calls in a session.json (stream-json format)
+# Tool uses appear as content blocks with type=tool_use in assistant messages
 count_tool_calls() {
     local file="$1"
     if [ ! -f "$file" ]; then
         echo "0"
         return
     fi
-    jq -r '
-        [.. | objects | select(.type == "tool_use")] | length
-    ' "$file" 2>/dev/null || echo "0"
+    grep -c '"tool_use"' "$file" 2>/dev/null || echo "0"
 }
 
 # Check if a run is "broken" (early scenario failed)
