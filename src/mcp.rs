@@ -67,13 +67,77 @@ pub struct GetParams {
     pub format: Option<String>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Deserialize)]
 pub struct EditParams {
     /// Path to the Elm file
     pub file: String,
     /// Action and its parameters
     #[serde(flatten)]
     pub action: EditAction,
+}
+
+// Custom JsonSchema: flatten the tagged union into a single object schema.
+// The Anthropic API rejects oneOf/allOf/anyOf at the top level, so we merge
+// all variant fields as optional properties alongside the required `file` and
+// `action` discriminator.
+impl schemars::JsonSchema for EditParams {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "EditParams".into()
+    }
+
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        use serde_json::json;
+
+        let str_schema = || json!({"type": "string"});
+        let bool_schema = || json!({"type": "boolean"});
+        let str_array_schema = || json!({"type": "array", "items": {"type": "string"}});
+
+        serde_json::from_value(json!({
+            "type": "object",
+            "description": "Modify an Elm file. Set the 'action' field to choose the operation, \
+                then include the parameters for that action. Actions: \"set\" (upsert declaration \
+                — requires 'source', optional 'name'), \"patch\" (find-replace in declaration — \
+                requires 'name', 'old', 'new'), \"rm\" (remove declaration — requires 'name'), \
+                \"mv\" (rename module across project — requires 'new_path', optional 'dry_run'), \
+                \"rename\" (rename declaration across project — requires 'name', 'new', optional \
+                'dry_run'), \"move_decl\" (move declarations to another module — requires 'names', \
+                'target', optional 'copy_shared_helpers', 'dry_run'), \"add_import\" (add/replace \
+                import — requires 'import'), \"remove_import\" (remove import — requires \
+                'module_name'), \"expose\" (add to exposing list — requires 'item'), \"unexpose\" \
+                (remove from exposing list — requires 'item'), \"add_variant\" (add constructor to \
+                custom type — requires 'type_name', 'definition', optional 'dry_run'), \
+                \"rm_variant\" (remove constructor from custom type — requires 'type_name', \
+                'constructor', optional 'dry_run').",
+            "required": ["file", "action"],
+            "additionalProperties": false,
+            "properties": {
+                "file": { "type": "string", "description": "Path to the Elm file" },
+                "action": {
+                    "type": "string",
+                    "enum": ["set", "patch", "rm", "mv", "rename", "move_decl",
+                             "add_import", "remove_import", "expose", "unexpose",
+                             "add_variant", "rm_variant"],
+                    "description": "The edit action to perform"
+                },
+                "source": str_schema(),
+                "name": str_schema(),
+                "old": str_schema(),
+                "new": str_schema(),
+                "new_path": str_schema(),
+                "dry_run": bool_schema(),
+                "names": str_array_schema(),
+                "target": str_schema(),
+                "copy_shared_helpers": bool_schema(),
+                "import": str_schema(),
+                "module_name": str_schema(),
+                "item": str_schema(),
+                "type_name": str_schema(),
+                "definition": str_schema(),
+                "constructor": str_schema(),
+            }
+        }))
+        .expect("valid schema")
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
