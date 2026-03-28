@@ -20,28 +20,6 @@
           }
         ]
       }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/hooks/block-read-elm.sh",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/hooks/block-edit-elm.sh",
-            "timeout": 5
-          }
-        ]
-      }
     ]
   }
 }

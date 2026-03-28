@@ -58,12 +58,10 @@ impl ServerHandler for ElmqServer {
 
 // -- Parameter types --
 
-// Fix schemars-generated schemas for Claude Code MCP compatibility:
-// 1. Remove $schema field (causes "Failed to fetch tools" in Claude Code)
-// 2. Strip nullable type arrays ["string", "null"] → "string"
+// Fix schemars-generated schemas for Anthropic API compatibility:
+// Strip nullable type arrays ["string", "null"] → "string" (API rejects type arrays)
 fn fix_schema(schema: &mut schemars::Schema) {
     if let Some(obj) = schema.as_object_mut() {
-        obj.remove("$schema");
         if let Some(props) = obj.get_mut("properties") {
             if let Some(props_obj) = props.as_object_mut() {
                 for (_key, prop) in props_obj.iter_mut() {
