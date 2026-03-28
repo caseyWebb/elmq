@@ -4,17 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-echo "Building elmq release binary..."
-cargo build --release --locked --manifest-path "$PROJECT_ROOT/Cargo.toml"
-
-echo "Copying binary to benchmarks directory..."
-cp "$PROJECT_ROOT/target/release/elmq" "$SCRIPT_DIR/elmq"
-
-echo "Building Docker image..."
-docker build -t elmq-bench "$SCRIPT_DIR"
-
-echo "Cleaning up..."
-rm "$SCRIPT_DIR/elmq"
+echo "Building Docker image (includes Rust compilation)..."
+docker build -t elmq-bench -f "$SCRIPT_DIR/Dockerfile" "$PROJECT_ROOT"
 
 echo "Done. Image: elmq-bench"
 echo ""
