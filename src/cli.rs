@@ -161,8 +161,57 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Add or remove type variant constructors, updating case expressions project-wide
+    Variant {
+        #[command(subcommand)]
+        command: VariantCommand,
+    },
     /// Start MCP server (stdio transport)
     Mcp,
+}
+
+#[derive(Subcommand)]
+pub enum VariantCommand {
+    /// Add a constructor to a custom type and insert branches in all case expressions
+    Add {
+        /// Path to the Elm file containing the type
+        file: PathBuf,
+
+        /// Name of the custom type (e.g. "Msg")
+        #[arg(long = "type")]
+        type_name: String,
+
+        /// Variant definition (e.g. "SetName String")
+        definition: String,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Compact)]
+        format: Format,
+
+        /// Preview changes without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove a constructor from a custom type and remove branches from all case expressions
+    Rm {
+        /// Path to the Elm file containing the type
+        file: PathBuf,
+
+        /// Name of the custom type (e.g. "Msg")
+        #[arg(long = "type")]
+        type_name: String,
+
+        /// Constructor name to remove (e.g. "Decrement")
+        constructor: String,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Compact)]
+        format: Format,
+
+        /// Preview changes without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]

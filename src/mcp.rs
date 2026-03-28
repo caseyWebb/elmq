@@ -147,6 +147,24 @@ pub enum EditAction {
         /// Item to unexpose, e.g. "helper"
         item: String,
     },
+    /// Add a constructor to a custom type and insert branches in all case expressions project-wide
+    AddVariant {
+        /// Name of the custom type (e.g. "Msg")
+        type_name: String,
+        /// Variant definition (e.g. "SetName String")
+        definition: String,
+        /// If true, preview changes without writing
+        dry_run: Option<bool>,
+    },
+    /// Remove a constructor from a custom type and remove branches from all case expressions project-wide
+    RmVariant {
+        /// Name of the custom type (e.g. "Msg")
+        type_name: String,
+        /// Constructor name to remove (e.g. "Decrement")
+        constructor: String,
+        /// If true, preview changes without writing
+        dry_run: Option<bool>,
+    },
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -360,7 +378,7 @@ impl ElmqServer {
 
     #[tool(
         name = "elm_edit",
-        description = "Modify an Elm file. Actions: \"set\" (upsert declaration), \"patch\" (find-replace in declaration), \"rm\" (remove declaration), \"mv\" (rename module across project), \"rename\" (rename declaration across project), \"move_decl\" (move declarations to another module), \"add_import\" (add/replace import), \"remove_import\" (remove import), \"expose\" (add to exposing list), \"unexpose\" (remove from exposing list). All writes are atomic."
+        description = "Modify an Elm file. Actions: \"set\" (upsert declaration), \"patch\" (find-replace in declaration), \"rm\" (remove declaration), \"mv\" (rename module across project), \"rename\" (rename declaration across project), \"move_decl\" (move declarations to another module), \"add_import\" (add/replace import), \"remove_import\" (remove import), \"expose\" (add to exposing list), \"unexpose\" (remove from exposing list), \"add_variant\" (add constructor to custom type, insert case branches project-wide), \"rm_variant\" (remove constructor from custom type, remove case branches project-wide). All writes are atomic."
     )]
     fn elm_edit(&self, Parameters(params): Parameters<EditParams>) -> Result<String, String> {
         match params.action {
@@ -454,6 +472,36 @@ impl ElmqServer {
                     writer::unexpose(&source, &summary, &item).map_err(|e| e.to_string())?;
                 writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("unexposed {item} in {}", params.file))
+            }
+            EditAction::AddVariant {
+                type_name,
+                definition,
+                dry_run,
+            } => {
+                let path = validate_path(&params.file)?;
+                let result = elmq::variant::execute_add_variant(
+                    &path,
+                    &type_name,
+                    &definition,
+                    dry_run.unwrap_or(false),
+                )
+                .map_err(|e: anyhow::Error| e.to_string())?;
+                serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {e}"))
+            }
+            EditAction::RmVariant {
+                type_name,
+                constructor,
+                dry_run,
+            } => {
+                let path = validate_path(&params.file)?;
+                let result = elmq::variant::execute_rm_variant(
+                    &path,
+                    &type_name,
+                    &constructor,
+                    dry_run.unwrap_or(false),
+                )
+                .map_err(|e: anyhow::Error| e.to_string())?;
+                serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {e}"))
             }
         }
     }
