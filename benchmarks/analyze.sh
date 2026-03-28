@@ -39,6 +39,18 @@ count_tool_calls() {
     grep -c '"tool_use"' "$file" 2>/dev/null || echo "0"
 }
 
+# Get tool call breakdown from a session.json
+# Returns sorted "count toolname" lines
+tool_breakdown() {
+    local file="$1"
+    if [ ! -f "$file" ]; then
+        return
+    fi
+    # Match both standard tools (Read, Write, etc.) and MCP tools (elm_*)
+    grep -oE '"(Read|Write|Edit|Bash|Glob|Grep|Agent|ToolSearch|elm_summary|elm_get|elm_edit|elm_refs)"' "$file" \
+        | sed 's/"//g' | sort | uniq -c | sort -rn
+}
+
 # Check if a run is "broken" (early scenario failed)
 is_run_broken_at() {
     local run_dir="$1"
@@ -206,4 +218,41 @@ for arm in "${ARMS[@]}"; do
         echo "  Verification pass rate:     $grand_pass/$grand_total_runs"
         echo ""
     fi
+done
+
+echo "============================================"
+echo "  Tool Breakdown (per scenario, latest run)"
+echo "============================================"
+echo ""
+
+for arm in "${ARMS[@]}"; do
+    arm_dir="$RESULTS_DIR/$arm"
+    [ -d "$arm_dir" ] || continue
+
+    # Use the latest run
+    latest_run=$(ls -d "$arm_dir"/*/ 2>/dev/null | sort | tail -1)
+    [ -n "$latest_run" ] || continue
+
+    echo "$arm ($(basename "$latest_run")):"
+    echo ""
+
+    for scenario in "${SCENARIOS[@]}"; do
+        session_file="$latest_run/$scenario/session.json"
+        [ -f "$session_file" ] || continue
+
+        status_file="$latest_run/$scenario/verify.status"
+        status="?"
+        [ -f "$status_file" ] && status="$(cat "$status_file")"
+
+        echo "  $scenario [$status]:"
+        breakdown=$(tool_breakdown "$session_file")
+        if [ -n "$breakdown" ]; then
+            echo "$breakdown" | while read -r count tool; do
+                printf "    %4s  %s\n" "$count" "$tool"
+            done
+        else
+            echo "    (no tool calls)"
+        fi
+        echo ""
+    done
 done
