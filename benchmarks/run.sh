@@ -57,7 +57,7 @@ run_arm() {
         --model sonnet
         --output-format stream-json
         --permission-mode bypassPermissions
-        --system-prompt-file "$SYSTEM_PROMPT"
+        --append-system-prompt-file "$SYSTEM_PROMPT"
     )
 
     if [[ "$arm" == "treatment" ]]; then
