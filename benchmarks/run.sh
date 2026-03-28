@@ -81,7 +81,7 @@ run_arm() {
         cd "$work_dir"
         echo "Running Claude..."
         local session_json
-        if session_json=$("${claude_base[@]}" "$prompt" 2>&1); then
+        if session_json=$("${claude_base[@]}" -- "$prompt" 2>&1); then
             echo "$session_json" > "$scenario_dir/session.json"
             echo "Claude completed successfully"
         else
