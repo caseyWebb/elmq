@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "elmq": {
-      "command": "elmq",
-      "args": ["mcp"]
-    }
-  }
-}
