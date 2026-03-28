@@ -26,7 +26,9 @@ if ! command -v elmq &>/dev/null; then
 fi
 
 cat << 'EOF'
-IMPORTANT: This is an Elm project. You MUST use the elmq MCP tools instead of built-in tools when working with .elm files. Do NOT use Read, Write, Edit, or Grep on .elm files — use the elmq equivalents below.
+IMPORTANT: This is an Elm project with elmq MCP tools available. Before doing ANY work on .elm files, you MUST first load the elmq tools by calling: ToolSearch("select:elm_summary,elm_get,elm_edit,elm_refs"). Do this at the very start — the tools are deferred and won't appear in your tool list until you search for them.
+
+Once loaded, you MUST use the elmq tools instead of built-in tools for .elm files. Do NOT use Read, Write, Edit, or Grep on .elm files — use the elmq equivalents below.
 
 RULES:
 1. To understand a file's structure → use elm_summary (NOT Read). Returns module line, imports, all declarations with types and line numbers in ~10% of the tokens.
