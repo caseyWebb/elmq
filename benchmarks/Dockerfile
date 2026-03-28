@@ -28,4 +28,8 @@ RUN chmod +x /bench/run.sh /bench/analyze.sh
 WORKDIR /bench/fixture
 RUN elm make src/Main.elm --output=/dev/null 2>&1 || true
 
+# Claude Code refuses --dangerously-skip-permissions as root
+RUN useradd -m -s /bin/bash bench && chown -R bench:bench /bench
+USER bench
+
 WORKDIR /bench
