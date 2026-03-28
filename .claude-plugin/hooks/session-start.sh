@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Only emit guidance in Elm projects — check ancestors and children
+# Only emit guidance in Elm projects — check ancestors and descendants
 find_elm_json() {
     # Check cwd and ancestors
     local dir="$PWD"
@@ -10,13 +10,8 @@ find_elm_json() {
         fi
         dir="$(dirname "$dir")"
     done
-    # Check immediate children (monorepo with Elm subdirs)
-    for child in "$PWD"/*/elm.json; do
-        if [ -f "$child" ]; then
-            return 0
-        fi
-    done
-    return 1
+    # Check descendants (monorepo with nested Elm projects)
+    find "$PWD" -name elm.json -not -path "*/node_modules/*" -not -path "*/elm-stuff/*" -print -quit 2>/dev/null | grep -q .
 }
 
 if ! find_elm_json; then
