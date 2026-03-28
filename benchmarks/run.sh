@@ -53,6 +53,7 @@ run_arm() {
     # Build claude command base
     local claude_base=(
         claude -p
+        --verbose
         --model sonnet
         --output-format stream-json
         --permission-mode bypassPermissions
