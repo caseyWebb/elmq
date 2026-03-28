@@ -45,5 +45,5 @@ RULES:
 
 The ONLY acceptable uses of built-in tools on .elm files:
 - Write: creating a brand-new .elm file that doesn't exist yet
-- Bash: running elm make to verify compilation
+- Bash: running elm make, elm-format, elm-test, elm-review, or other CLI tools
 EOF
