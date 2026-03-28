@@ -59,9 +59,73 @@ impl ServerHandler for ElmqServer {
 // -- Parameter types --
 
 // Fix schemars-generated schemas for Anthropic API compatibility:
-// Strip nullable type arrays ["string", "null"] → "string" (API rejects type arrays)
+// 1. Strip nullable type arrays ["string", "null"] → "string"
+// 2. Flatten oneOf (from serde tagged enums with flatten) into a single object
+//    schema with all variant fields as optional properties
 fn fix_schema(schema: &mut schemars::Schema) {
     if let Some(obj) = schema.as_object_mut() {
+        // Flatten oneOf: merge all variant schemas into a single properties map
+        if let Some(one_of) = obj.remove("oneOf") {
+            if let serde_json::Value::Array(variants) = one_of {
+                let mut all_props = serde_json::Map::new();
+                let mut action_values = Vec::new();
+
+                for variant in &variants {
+                    if let Some(variant_obj) = variant.as_object() {
+                        // Collect action enum values from const fields
+                        if let Some(action_prop) = variant_obj
+                            .get("properties")
+                            .and_then(|p| p.get("action"))
+                            .and_then(|a| a.get("const"))
+                        {
+                            action_values.push(action_prop.clone());
+                        }
+                        // Merge all properties (skip "action" — we'll rebuild it)
+                        if let Some(props) = variant_obj.get("properties").and_then(|p| p.as_object())
+                        {
+                            for (k, v) in props {
+                                if k != "action" {
+                                    all_props.entry(k.clone()).or_insert_with(|| v.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Build the action enum property
+                all_props.insert(
+                    "action".to_owned(),
+                    serde_json::json!({
+                        "type": "string",
+                        "enum": action_values,
+                        "description": "The edit action to perform"
+                    }),
+                );
+
+                // Merge into existing properties
+                if let Some(existing_props) = obj
+                    .get_mut("properties")
+                    .and_then(|p| p.as_object_mut())
+                {
+                    for (k, v) in all_props {
+                        existing_props.entry(k).or_insert(v);
+                    }
+                } else {
+                    obj.insert(
+                        "properties".to_owned(),
+                        serde_json::Value::Object(all_props),
+                    );
+                }
+
+                // Set required to just file + action
+                obj.insert(
+                    "required".to_owned(),
+                    serde_json::json!(["file", "action"]),
+                );
+            }
+        }
+
+        // Strip nullable type arrays in all properties
         if let Some(props) = obj.get_mut("properties") {
             if let Some(props_obj) = props.as_object_mut() {
                 for (_key, prop) in props_obj.iter_mut() {
