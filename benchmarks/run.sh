@@ -45,6 +45,8 @@ run_arm() {
     rm -rf "$work_dir/.git"
     cd "$work_dir"
     git init -q
+    git config user.email "bench@elmq"
+    git config user.name "elmq-bench"
     git add -A
     git commit -q -m "initial fixture state"
 
