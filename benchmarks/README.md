@@ -1,6 +1,12 @@
 # MCP Benchmark Harness
 
-Measures token usage of Claude Code with and without the elmq MCP server on identical Elm coding tasks.
+Measures token usage of Claude Code across three configurations on identical Elm coding tasks.
+
+| Arm | What's different |
+|-----|-----------------|
+| `control` | No MCP server, no plugin — baseline |
+| `treatment` | elmq MCP server via `--mcp-config` |
+| `treatment-plugin` | elmq Claude Code plugin via `--plugin-dir` (MCP server + SessionStart hook guidance) |
 
 ## Setup
 
@@ -10,7 +16,7 @@ Measures token usage of Claude Code with and without the elmq MCP server on iden
 ./benchmarks/build.sh
 ```
 
-This compiles the elmq release binary and builds the `elmq-bench` Docker image with Node, Elm, Claude Code, and the fixture project (rtfeldman/elm-spa-example).
+This compiles the elmq release binary and builds the `elmq-bench` Docker image with Node, Elm, Claude Code, the plugin, and the fixture project (rtfeldman/elm-spa-example).
 
 ### 2. Create auth credentials
 
@@ -24,7 +30,7 @@ This file is gitignored.
 
 ## Running Benchmarks
 
-Run both arms (control then treatment):
+Run all three arms:
 
 ```sh
 docker run --env-file benchmarks/.env \
@@ -46,7 +52,13 @@ docker run --env-file benchmarks/.env \
   elmq-bench /bench/run.sh treatment
 ```
 
-Results accumulate in `benchmarks/results/` (gitignored). Run as many times as you like.
+```sh
+docker run --env-file benchmarks/.env \
+  -v "$(pwd)/benchmarks/results:/bench/results" \
+  elmq-bench /bench/run.sh treatment-plugin
+```
+
+Arms can run in parallel in separate terminals. Results accumulate in `benchmarks/results/` (gitignored).
 
 ## Analyzing Results
 
@@ -56,9 +68,9 @@ docker run \
   elmq-bench /bench/analyze.sh
 ```
 
-Outputs a table comparing control vs treatment across all runs:
-- Input/output/cache tokens per scenario
-- Tool call counts
+Outputs:
+- Per-scenario token averages (input, output, cache) for each arm
+- Tool call counts and per-scenario tool breakdown
 - Verification pass rates
 - Broken-run filtering (if scenario N fails, scenarios N+1..5 are excluded)
 
