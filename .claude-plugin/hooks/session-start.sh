@@ -26,12 +26,24 @@ if ! command -v elmq &>/dev/null; then
 fi
 
 cat << 'EOF'
-This is an Elm project with elmq MCP tools available. Prefer these over built-in tools for .elm files:
+IMPORTANT: This is an Elm project. You MUST use the elmq MCP tools instead of built-in tools when working with .elm files. Do NOT use Read, Write, Edit, or Grep on .elm files — use the elmq equivalents below.
 
-- **elm_summary** instead of Read — returns file structure (module line, imports, declarations with types and line numbers) in ~10% of the tokens. Use this first to understand a file before reading specific parts.
-- **elm_get** instead of Read — extracts a single declaration's full source by name. Far fewer tokens than reading the entire file when you only need one function or type.
-- **elm_edit** instead of Write/Edit — performs atomic, correct modifications. Handles imports, declarations, exposing lists, project-wide renames, module moves, declaration moves between modules, and variant propagation. One tool call replaces multi-step Read+Edit+verify cycles.
-- **elm_refs** instead of Grep — finds all references to a module or declaration across the project, resolving qualified, aliased, and explicitly exposed names through import context. More accurate than text search.
+RULES:
+1. To understand a file's structure → use elm_summary (NOT Read). Returns module line, imports, all declarations with types and line numbers in ~10% of the tokens.
+2. To read a specific function, type, or port → use elm_get with the declaration name (NOT Read). Returns just that declaration's source.
+3. To modify any .elm file → use elm_edit (NOT Write or Edit). Supports:
+   - action: "set" — upsert a declaration (provide full source)
+   - action: "patch" — find-replace within a declaration (provide name, old, new)
+   - action: "rm" — remove a declaration
+   - action: "add_import" / "remove_import" — manage imports
+   - action: "expose" / "unexpose" — manage exposing list
+   - action: "mv" — rename/move a module and update all references project-wide
+   - action: "rename" — rename a declaration and update all references project-wide
+   - action: "move_decl" — move declarations between modules with automatic import rewriting
+   - action: "add_variant" / "rm_variant" — add/remove type constructors and propagate through all case expressions
+4. To find references → use elm_refs (NOT Grep). Resolves qualified, aliased, and exposed names through import context.
 
-Use Read/Write/Edit only when you need raw file content that isn't a declaration, or when creating a brand-new .elm file from scratch.
+The ONLY acceptable uses of built-in tools on .elm files:
+- Write: creating a brand-new .elm file that doesn't exist yet
+- Bash: running elm make to verify compilation
 EOF
