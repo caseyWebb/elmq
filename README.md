@@ -292,7 +292,26 @@ Exposes 4 tools optimized for LLM agents:
 | `elm_edit` | All file mutations: `set`, `patch`, `rm`, `mv`, `rename`, `move_decl`, `add_variant`, `rm_variant`, `add_import`, `remove_import`, `expose`, `unexpose` |
 | `elm_refs` | Find all references to a module or declaration across the project |
 
-Configure in your MCP client (e.g. Claude Code `settings.json`):
+### Claude Code Plugin
+
+For best results with Claude Code, install the elmq plugin:
+
+```sh
+/plugin marketplace add caseyWebb/elmq
+/plugin install elmq@elmq
+```
+
+Or load directly for testing:
+
+```sh
+claude --plugin-dir path/to/elmq/.claude-plugin
+```
+
+The plugin auto-registers the MCP server and includes a SessionStart hook that detects Elm projects (via `elm.json`) and guides Claude to prefer elmq tools over built-in Read/Write/Edit for `.elm` files. The guidance survives context compaction.
+
+### Manual MCP Configuration
+
+Alternatively, configure the MCP server directly in your MCP client (e.g. Claude Code `settings.json`):
 
 ```json
 {

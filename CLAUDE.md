@@ -42,6 +42,8 @@ Rust toolchain is pinned in `rust-toolchain.toml` (rustup installs it automatica
 The library (`lib.rs` + `parser.rs` + `imports.rs` + `writer.rs` + `project.rs` + `refs.rs` + `move_decl.rs` + `variant.rs`) is fully testable without the CLI binary.
 
 - **`tests/`** — Integration tests per command: `get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `variant.rs`, `mcp.rs`.
+- **`.claude-plugin/`** — Claude Code plugin (also serves as marketplace): `plugin.json` manifest, `.mcp.json` for auto-registering the MCP server, `marketplace.json` for distribution, and a `SessionStart` hook that detects Elm projects and injects guidance to prefer elmq tools over built-in Read/Write/Edit. Re-fires after context compaction.
+- **`benchmarks/`** — Dockerized benchmark harness comparing token usage across control (no MCP), treatment (MCP only), and treatment-plugin (MCP + plugin hook) arms.
 
 ## Conventions
 

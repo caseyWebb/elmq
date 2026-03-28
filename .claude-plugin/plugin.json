@@ -1,0 +1,17 @@
+{
+  "name": "elmq",
+  "version": "0.1.0",
+  "description": "Elm file query and edit tools via elmq MCP server",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

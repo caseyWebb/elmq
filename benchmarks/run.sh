@@ -15,10 +15,11 @@ SYSTEM_PROMPT="$BENCH_DIR/system-prompt.md"
 MCP_CONFIG="$BENCH_DIR/mcp-config.json"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%S)"
 
-ARM="${1:-both}"
+PLUGIN_DIR="$BENCH_DIR/claude-plugin"
+ARM="${1:-all}"
 
-if [[ "$ARM" != "control" && "$ARM" != "treatment" && "$ARM" != "both" ]]; then
-    echo "Usage: run.sh [control|treatment|both]" >&2
+if [[ "$ARM" != "control" && "$ARM" != "treatment" && "$ARM" != "treatment-plugin" && "$ARM" != "all" ]]; then
+    echo "Usage: run.sh [control|treatment|treatment-plugin|all]" >&2
     exit 1
 fi
 
@@ -56,12 +57,14 @@ run_arm() {
         --verbose
         --model sonnet
         --output-format stream-json
-        --permission-mode bypassPermissions
+        --dangerously-skip-permissions
         --append-system-prompt-file "$SYSTEM_PROMPT"
     )
 
     if [[ "$arm" == "treatment" ]]; then
         claude_base+=(--mcp-config "$MCP_CONFIG")
+    elif [[ "$arm" == "treatment-plugin" ]]; then
+        claude_base+=(--plugin-dir "$PLUGIN_DIR")
     fi
 
     for scenario in "${SCENARIOS[@]}"; do
@@ -113,12 +116,16 @@ run_arm() {
 }
 
 # Run requested arms
-if [[ "$ARM" == "control" || "$ARM" == "both" ]]; then
+if [[ "$ARM" == "control" || "$ARM" == "all" ]]; then
     run_arm "control"
 fi
 
-if [[ "$ARM" == "treatment" || "$ARM" == "both" ]]; then
+if [[ "$ARM" == "treatment" || "$ARM" == "all" ]]; then
     run_arm "treatment"
+fi
+
+if [[ "$ARM" == "treatment-plugin" || "$ARM" == "all" ]]; then
+    run_arm "treatment-plugin"
 fi
 
 echo ""

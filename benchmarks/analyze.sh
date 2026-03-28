@@ -11,7 +11,7 @@ SCENARIOS=(
     "05-add-variant"
 )
 
-ARMS=("control" "treatment")
+ARMS=("control" "treatment" "treatment-plugin")
 
 # Extract token metrics from a session.json (stream-json format: one JSON object per line)
 # The result message (last line with type=result) contains usage data.
@@ -253,6 +253,97 @@ for arm in "${ARMS[@]}"; do
         else
             echo "    (no tool calls)"
         fi
+        echo ""
+    done
+done
+
+echo "============================================"
+echo "  Tool Call Details (per scenario, latest run)"
+echo "============================================"
+echo ""
+
+# Extract a one-line summary of a tool call's arguments
+tool_call_summary() {
+    local name="$1"
+    local input="$2"
+    local max_len=100
+
+    local summary
+    case "$name" in
+        Read)
+            summary=$(echo "$input" | jq -r '.file_path // empty' 2>/dev/null)
+            ;;
+        Write)
+            summary=$(echo "$input" | jq -r '.file_path // empty' 2>/dev/null)
+            ;;
+        Edit)
+            summary=$(echo "$input" | jq -r '.file_path // empty' 2>/dev/null)
+            ;;
+        Glob)
+            summary=$(echo "$input" | jq -r '"\(.pattern)" + (if .path then " in \(.path)" else "" end)' 2>/dev/null)
+            ;;
+        Grep)
+            summary=$(echo "$input" | jq -r '"\(.pattern)" + (if .path then " in \(.path)" else "" end)' 2>/dev/null)
+            ;;
+        Bash)
+            summary=$(echo "$input" | jq -r '.command // empty' 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')
+            ;;
+        Agent)
+            summary=$(echo "$input" | jq -r '(.description // .prompt[:80]) + (if .subagent_type then " [\(.subagent_type)]" else "" end)' 2>/dev/null)
+            ;;
+        elm_summary|elm_get|elm_edit|elm_refs)
+            summary=$(echo "$input" | jq -c '.' 2>/dev/null)
+            ;;
+        *)
+            summary=$(echo "$input" | jq -c '.' 2>/dev/null)
+            ;;
+    esac
+
+    # Strip workdir paths to reduce noise
+    summary=$(echo "$summary" | sed -E 's|(/bench)?/results/[^/]+/[^/]+/workdir/||g')
+
+    if [ ${#summary} -gt $max_len ]; then
+        summary="${summary:0:$max_len}..."
+    fi
+    echo "$summary"
+}
+
+for arm in "${ARMS[@]}"; do
+    arm_dir="$RESULTS_DIR/$arm"
+    [ -d "$arm_dir" ] || continue
+
+    latest_run=$(ls -d "$arm_dir"/*/ 2>/dev/null | sort | tail -1)
+    [ -n "$latest_run" ] || continue
+
+    echo "$arm ($(basename "$latest_run")):"
+    echo ""
+
+    for scenario in "${SCENARIOS[@]}"; do
+        session_file="$latest_run/$scenario/session.json"
+        [ -f "$session_file" ] || continue
+
+        status_file="$latest_run/$scenario/verify.status"
+        status="?"
+        [ -f "$status_file" ] && status="$(cat "$status_file")"
+
+        echo "  $scenario [$status]:"
+
+        # Extract all tool_use entries in order, including from subagent lines
+        grep '"tool_use"' "$session_file" | jq -c '
+            .message.content[]? | select(.type=="tool_use") | {name, input}
+        ' 2>/dev/null | {
+            n=0
+            while IFS= read -r line; do
+                n=$((n + 1))
+                name=$(echo "$line" | jq -r '.name')
+                input=$(echo "$line" | jq -c '.input')
+                summary=$(tool_call_summary "$name" "$input")
+                printf "    %3d. %-12s %s\n" "$n" "$name" "$summary"
+            done
+            if [ "$n" -eq 0 ]; then
+                echo "    (no tool calls)"
+            fi
+        }
         echo ""
     done
 done

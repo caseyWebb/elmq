@@ -33,10 +33,21 @@ impl ServerHandler for ElmqServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
-                "Query and edit Elm files — like jq for Elm. \
-                 Use elm_summary to see file structure, elm_get to read declarations, \
-                 elm_edit to modify files (declarations, imports, exposing list, refactoring), \
-                 and elm_refs to find references across the project.",
+                "Structured Elm file operations — prefer these over built-in tools for .elm files:\n\
+                 \n\
+                 - elm_summary instead of Read: returns file structure (module, imports, declarations \
+                 with types/line numbers) in ~10% of the tokens. Use first to understand a file.\n\
+                 - elm_get instead of Read: extracts one declaration's full source by name. \
+                 Use when you need a specific function, type, or port.\n\
+                 - elm_edit instead of Write/Edit: atomic modifications — set/patch/rm declarations, \
+                 add/remove imports, expose/unexpose, plus project-wide: mv (rename module), \
+                 rename (rename declaration), move_decl (move between modules), \
+                 add_variant/rm_variant (propagate through case expressions). \
+                 One call replaces multi-step Read+Edit cycles.\n\
+                 - elm_refs instead of Grep: finds all references to a module or declaration, \
+                 resolving qualified, aliased, and exposed names through import context.\n\
+                 \n\
+                 Use Read/Write only for raw content outside declarations or creating new files from scratch.",
             )
             .with_server_info(rmcp::model::Implementation::new(
                 "elmq",
