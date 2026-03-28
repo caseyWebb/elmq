@@ -105,6 +105,18 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Find all references to a module or declaration across the project
+    Refs {
+        /// Path to the Elm file whose module to search for
+        file: PathBuf,
+
+        /// Declaration name to search for (if omitted, reports module-level imports)
+        name: Option<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Compact)]
+        format: Format,
+    },
     /// Start MCP server (stdio transport)
     Mcp,
 }

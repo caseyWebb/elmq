@@ -11,6 +11,7 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::parser;
+use crate::refs;
 use crate::writer;
 use crate::{Declaration, DeclarationKind, FileSummary};
 
@@ -34,7 +35,8 @@ impl ServerHandler for ElmqServer {
             .with_instructions(
                 "Query and edit Elm files — like jq for Elm. \
                  Use elm_summary to see file structure, elm_get to read declarations, \
-                 elm_edit to modify declarations, and elm_module to manage imports and exposing.",
+                 elm_edit to modify declarations, elm_module to manage imports and exposing, \
+                 and elm_refs to find references across the project.",
             )
             .with_server_info(rmcp::model::Implementation::new(
                 "elmq",
@@ -123,6 +125,16 @@ pub struct ModuleParams {
     pub module_name: Option<String>,
     /// Item to expose or unexpose, e.g. "update" or "Msg(..)" (required for "expose"/"unexpose")
     pub item: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RefsParams {
+    /// Path to the Elm file whose module to search for
+    pub file: String,
+    /// Declaration name to search for (if omitted, returns module-level references)
+    pub name: Option<String>,
+    /// Output format: "compact" (default) or "json"
+    pub format: Option<String>,
 }
 
 // -- Helpers --
@@ -381,6 +393,37 @@ impl ElmqServer {
                 Ok(format!("removed {name} from {}", params.file))
             }
             EditAction::Mv => self.handle_mv(&params),
+        }
+    }
+
+    #[tool(
+        name = "elm_refs",
+        description = "Find all references to a module or declaration across the Elm project. Without a name, returns files that import the module. With a name, returns all usage sites (qualified, aliased, and explicitly exposed references) with line numbers."
+    )]
+    fn elm_refs(&self, Parameters(params): Parameters<RefsParams>) -> Result<String, String> {
+        let path = validate_path(&params.file)?;
+        let is_json = params.format.as_deref() == Some("json");
+
+        let project = elmq::project::Project::discover(&path).map_err(|e| e.to_string())?;
+        let target_module = project.module_name(&path).map_err(|e| e.to_string())?;
+        let matches = refs::find_refs(&project, &target_module, params.name.as_deref())
+            .map_err(|e| e.to_string())?;
+
+        if is_json {
+            serde_json::to_string_pretty(&matches)
+                .map_err(|e| format!("JSON serialization error: {e}"))
+        } else {
+            let lines: Vec<String> = matches
+                .iter()
+                .map(|r| {
+                    if let Some(text) = &r.text {
+                        format!("{}:{}: {}", r.file, r.line, text)
+                    } else {
+                        format!("{}:{}", r.file, r.line)
+                    }
+                })
+                .collect();
+            Ok(lines.join("\n"))
         }
     }
 

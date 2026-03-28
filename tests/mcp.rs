@@ -173,7 +173,8 @@ fn tools_list() {
     assert!(names.contains(&"elm_get"));
     assert!(names.contains(&"elm_edit"));
     assert!(names.contains(&"elm_module"));
-    assert_eq!(names.len(), 4);
+    assert!(names.contains(&"elm_refs"));
+    assert_eq!(names.len(), 5);
 
     drop(stdin);
     let _ = child.wait();
@@ -659,4 +660,84 @@ fn rejects_relative_path_traversal() {
     // Either "outside the working directory" or "invalid path" (if file doesn't exist)
     let text = result_text(&resp);
     assert!(text.contains("outside the working directory") || text.contains("invalid path"),);
+}
+
+// -- elm_refs tests --
+
+#[test]
+fn refs_module_level_via_mcp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Lib/Utils.elm",
+        "module Lib.Utils exposing (helper)\n\nhelper = 1\n",
+    );
+    write_elm(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nimport Lib.Utils\n\nmain = Lib.Utils.helper\n",
+    );
+
+    let resp = call_tool_in_dir(
+        root,
+        "elm_refs",
+        serde_json::json!({"file": "src/Lib/Utils.elm"}),
+    );
+    assert!(!is_error(&resp), "got error: {}", result_text(&resp));
+    let text = result_text(&resp);
+    assert!(text.contains("src/Main.elm:"));
+}
+
+#[test]
+fn refs_declaration_level_via_mcp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Lib/Utils.elm",
+        "module Lib.Utils exposing (helper)\n\nhelper = 1\n",
+    );
+    write_elm(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nimport Lib.Utils as LU\n\nmain = LU.helper\n",
+    );
+
+    let resp = call_tool_in_dir(
+        root,
+        "elm_refs",
+        serde_json::json!({"file": "src/Lib/Utils.elm", "name": "helper"}),
+    );
+    assert!(!is_error(&resp), "got error: {}", result_text(&resp));
+    let text = result_text(&resp);
+    assert!(text.contains("LU.helper"));
+}
+
+#[test]
+fn refs_no_results_via_mcp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Lib/Utils.elm",
+        "module Lib.Utils exposing (helper)\n\nhelper = 1\n",
+    );
+    write_elm(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nmain = 1\n",
+    );
+
+    let resp = call_tool_in_dir(
+        root,
+        "elm_refs",
+        serde_json::json!({"file": "src/Lib/Utils.elm"}),
+    );
+    assert!(!is_error(&resp), "got error: {}", result_text(&resp));
+    let text = result_text(&resp);
+    assert!(text.is_empty());
 }

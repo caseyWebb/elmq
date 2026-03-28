@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is elmq?
 
-A Rust CLI and MCP server for querying and editing Elm files — like jq for Elm. Uses tree-sitter-elm for parsing. Supports reading (`list`, `get`), writing (`set`, `patch`, `rm`, `import`, `expose`/`unexpose`), and project-wide operations (`mv` — rename a module and update all references). The MCP server (`elmq mcp`) exposes 4 consolidated tools over stdio transport.
+A Rust CLI and MCP server for querying and editing Elm files — like jq for Elm. Uses tree-sitter-elm for parsing. Supports reading (`list`, `get`), writing (`set`, `patch`, `rm`, `import`, `expose`/`unexpose`), and project-wide operations (`mv` — rename a module and update all references; `refs` — find all references to a module or declaration). The MCP server (`elmq mcp`) exposes 5 consolidated tools over stdio transport.
 
 ## Build & Test Commands
 
@@ -29,15 +29,16 @@ Rust toolchain is pinned in `rust-toolchain.toml` (rustup installs it automatica
 
 - **`src/lib.rs`** — Public types (`FileSummary`, `Declaration`, `DeclarationKind`). The library crate root.
 - **`src/parser.rs`** — All tree-sitter-elm parsing logic: `parse()` returns a tree, `extract_summary()` walks it to produce a `FileSummary`, `find_declaration()` looks up by name, `extract_declaration_name()` parses a name from source text. Unit tests live here inline.
-- **`src/project.rs`** — Project discovery: find `elm.json`, parse `source-directories`, resolve module names from file paths, enumerate all `.elm` files. Used by `mv` and future cross-file operations.
+- **`src/project.rs`** — Project discovery: find `elm.json`, parse `source-directories`, resolve module names from file paths, enumerate all `.elm` files. Used by `mv` and `refs`.
 - **`src/writer.rs`** — All write operations: `upsert_declaration()`, `patch_declaration()`, `remove_declaration()`, `add_import()`, `remove_import()`, `expose()`, `unexpose()`, `rename_module_references()`, `rename_module_declaration()`, plus `atomic_write()` for safe file writes.
 - **`src/cli.rs`** — clap derive definitions (`Cli`, `Command`, `ImportCommand`, `Format`).
-- **`src/mcp.rs`** — MCP stdio server: `ElmqServer` handler with 4 tools (`elm_summary`, `elm_get`, `elm_edit`, `elm_module`), parameter types, and `run_mcp_server()` entry point. Uses `rmcp` SDK.
-- **`src/main.rs`** — Thin CLI entry point. Reads file, calls parser/writer, formats output. The `mv` command uses `project.rs` for multi-file operations. The `mcp` subcommand creates a tokio runtime and starts the MCP server. Not part of the library crate.
+- **`src/refs.rs`** — Project-wide reference finding: `find_refs()` locates all references to a module or declaration across the project, resolving qualified, aliased, and explicitly-exposed references via tree-sitter.
+- **`src/mcp.rs`** — MCP stdio server: `ElmqServer` handler with 5 tools (`elm_summary`, `elm_get`, `elm_edit`, `elm_module`, `elm_refs`), parameter types, and `run_mcp_server()` entry point. Uses `rmcp` SDK.
+- **`src/main.rs`** — Thin CLI entry point. Reads file, calls parser/writer, formats output. The `mv` and `refs` commands use `project.rs` for multi-file operations. The `mcp` subcommand creates a tokio runtime and starts the MCP server. Not part of the library crate.
 
-The library (`lib.rs` + `parser.rs` + `writer.rs` + `project.rs`) is fully testable without the CLI binary.
+The library (`lib.rs` + `parser.rs` + `writer.rs` + `project.rs` + `refs.rs`) is fully testable without the CLI binary.
 
-- **`tests/`** — Integration tests per command: `get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `mcp.rs`.
+- **`tests/`** — Integration tests per command: `get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `mcp.rs`.
 
 ## Conventions
 
