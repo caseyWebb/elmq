@@ -81,15 +81,12 @@ run_arm() {
         local prompt
         prompt="$(cat "$prompt_file")"
 
-        # Run Claude
+        # Run Claude — stream to file, print tool calls live
         cd "$work_dir"
         echo "Running Claude..."
-        local session_json
-        if session_json=$("${claude_base[@]}" -- "$prompt" 2>&1); then
-            echo "$session_json" > "$scenario_dir/session.json"
+        if "${claude_base[@]}" -- "$prompt" 2>&1 | tee "$scenario_dir/session.json" | grep --line-buffered '"tool_use"' | jq -r '.message.content[]? | select(.type=="tool_use") | "  → \(.name)"' 2>/dev/null; then
             echo "Claude completed successfully"
         else
-            echo "$session_json" > "$scenario_dir/session.json"
             echo "WARNING: Claude exited with non-zero status"
         fi
 
