@@ -3,7 +3,7 @@ mod mcp;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Command, Format, ImportCommand};
+use cli::{Cli, Command, Format, ImportCommand, VariantCommand};
 use elmq::parser;
 use elmq::project;
 use elmq::refs;
@@ -261,6 +261,94 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Variant { command } => match command {
+            VariantCommand::Add {
+                file,
+                type_name,
+                definition,
+                format,
+                dry_run,
+            } => {
+                let canonical = file
+                    .canonicalize()
+                    .with_context(|| format!("file not found: {}", file.display()))?;
+
+                let result = elmq::variant::execute_add_variant(
+                    &canonical,
+                    &type_name,
+                    &definition,
+                    dry_run,
+                )?;
+
+                match format {
+                    Format::Compact => {
+                        let prefix = if dry_run { "(dry run) " } else { "" };
+                        println!(
+                            "{prefix}added {} to {} in {}",
+                            result.variant_name, result.type_name, result.type_file
+                        );
+                        for edit in &result.edits {
+                            println!(
+                                "  {prefix}{}:{}  {}  — inserted branch",
+                                edit.file, edit.line, edit.function
+                            );
+                        }
+                        for skip in &result.skipped {
+                            println!(
+                                "  {}:{}  {}  — skipped ({})",
+                                skip.file, skip.line, skip.function, skip.reason
+                            );
+                        }
+                    }
+                    Format::Json => {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    }
+                }
+            }
+            VariantCommand::Rm {
+                file,
+                type_name,
+                constructor,
+                format,
+                dry_run,
+            } => {
+                let canonical = file
+                    .canonicalize()
+                    .with_context(|| format!("file not found: {}", file.display()))?;
+
+                let result = elmq::variant::execute_rm_variant(
+                    &canonical,
+                    &type_name,
+                    &constructor,
+                    dry_run,
+                )?;
+
+                match format {
+                    Format::Compact => {
+                        let prefix = if dry_run { "(dry run) " } else { "" };
+                        println!(
+                            "{prefix}removed {} from {} in {}",
+                            result.variant_name, result.type_name, result.type_file
+                        );
+                        for edit in &result.edits {
+                            println!(
+                                "  {prefix}{}:{}  {}  — removed branch",
+                                edit.file, edit.line, edit.function
+                            );
+                        }
+                        for skip in &result.skipped {
+                            println!(
+                                "  {}:{}  {}  — skipped ({})",
+                                skip.file, skip.line, skip.function, skip.reason
+                            );
+                        }
+                    }
+                    Format::Json => {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    }
+                }
+            }
+        },
         Command::Mcp => {
             tokio::runtime::Runtime::new()
                 .context("failed to create tokio runtime")?

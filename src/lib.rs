@@ -3,6 +3,7 @@ pub mod move_decl;
 pub mod parser;
 pub mod project;
 pub mod refs;
+pub mod variant;
 pub mod writer;
 
 use serde::Serialize;

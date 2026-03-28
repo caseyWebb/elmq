@@ -35,7 +35,7 @@ The system SHALL provide an `elm_edit` tool that performs all file mutations. Th
 
 Parameters:
 - `file` (string, required): Path to the Elm file
-- `action` (string, required): One of `set`, `patch`, `rm`, `mv`, `rename`, `move_decl`, `add_import`, `remove_import`, `expose`, `unexpose`
+- `action` (string, required): One of `set`, `patch`, `rm`, `mv`, `rename`, `move_decl`, `add_import`, `remove_import`, `expose`, `unexpose`, `add_variant`, `rm_variant`
 - `source` (string, required for `set`): Full source text of the declaration to upsert
 - `name` (string, optional for `set`, required for `patch`/`rm`/`rename`): Declaration name
 - `old` (string, required for `patch`): Text to find within the declaration
@@ -46,8 +46,11 @@ Parameters:
 - `import` (string, required for `add_import`): Import clause (e.g., `Html exposing (Html, div)`)
 - `module_name` (string, required for `remove_import`): Module name to remove (e.g., `Html`)
 - `item` (string, required for `expose`/`unexpose`): Item to expose or unexpose (e.g., `update` or `Msg(..)`)
+- `type_name` (string, required for `add_variant`/`rm_variant`): Name of the custom type (e.g., `Msg`)
+- `definition` (string, required for `add_variant`): Variant definition (e.g., `SetName String`)
+- `constructor` (string, required for `rm_variant`): Constructor name to remove (e.g., `Decrement`)
 - `copy_shared_helpers` (boolean, optional for `move_decl`): Copy shared helpers instead of erroring
-- `dry_run` (boolean, optional for `mv`/`rename`/`move_decl`): Preview without writing
+- `dry_run` (boolean, optional for `mv`/`rename`/`move_decl`/`add_variant`/`rm_variant`): Preview without writing
 
 #### Scenario: Set (upsert) a declaration
 - **WHEN** `elm_edit` is called with `action: "set"` and `source` containing a declaration
@@ -76,6 +79,18 @@ Parameters:
 #### Scenario: Unexpose an item
 - **WHEN** `elm_edit` is called with `action: "unexpose"` and an `item`
 - **THEN** the tool SHALL remove the item from the module's exposing list and write atomically
+
+#### Scenario: Add a variant constructor
+- **WHEN** `elm_edit` is called with `action: "add_variant"`, `type_name`, and `definition`
+- **THEN** the tool SHALL add the constructor to the type and insert `Debug.todo` branches in all matching case expressions project-wide, returning a JSON `VariantResult`
+
+#### Scenario: Remove a variant constructor
+- **WHEN** `elm_edit` is called with `action: "rm_variant"`, `type_name`, and `constructor`
+- **THEN** the tool SHALL remove the constructor from the type and remove matching branches from all case expressions project-wide, returning a JSON `VariantResult`
+
+#### Scenario: Variant dry run
+- **WHEN** `add_variant` or `rm_variant` is called with `dry_run: true`
+- **THEN** no files SHALL be written, and the result SHALL include `"dry_run": true`
 
 #### Scenario: Write confirmation
 - **WHEN** any `elm_edit` action completes successfully

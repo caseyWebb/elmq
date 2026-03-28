@@ -49,7 +49,7 @@ Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scri
 - `refs` — find all references to a module or declaration across the project ✓
 - `rename` — rename a declaration and update all references across the project ✓
 - `move-decl` — move declarations between modules with import-aware body rewriting, automatic helper detection, and project-wide reference updates ✓
-- Propagating edits (add type constructor → update case expressions at all use sites)
+- `variant add`/`variant rm` — add or remove type constructors with project-wide case expression propagation ✓
 
 ## Phase 5: Advanced
 

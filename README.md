@@ -226,6 +226,33 @@ Moves declarations from one module to another, rewriting the declaration bodies 
 
 Use `--copy-shared-helpers` to duplicate (not move) helpers that are used by both moved and non-moved declarations. Use `--dry-run` to preview changes.
 
+### Add/remove type variant constructors
+
+```sh
+elmq variant add src/Types.elm --type Msg "SetName String"
+```
+
+```
+added SetName to Msg in src/Types.elm
+  src/Update.elm:22  update      — inserted branch
+  src/View.elm:15    label       — inserted branch
+  src/Main.elm:31    update      — skipped (wildcard branch covers new variant)
+```
+
+Appends a constructor to a custom type and inserts `Debug.todo` branches in all matching case expressions project-wide. Case expressions with wildcard (`_`) branches are skipped with an info message.
+
+```sh
+elmq variant rm src/Types.elm --type Msg Decrement
+```
+
+```
+removed Decrement from Msg in src/Types.elm
+  src/Update.elm:22  update  — removed branch
+  src/View.elm:15    label   — removed branch
+```
+
+Removes a constructor and its matching branches from all case expressions. Errors if removing the last variant (use `elmq rm` instead). Use `--dry-run` to preview changes.
+
 ### JSON output
 
 ```sh
@@ -262,7 +289,7 @@ Exposes 4 tools optimized for LLM agents:
 |------|-------------|
 | `elm_summary` | File overview: module, imports, declarations with types and line numbers |
 | `elm_get` | Extract full source text of a declaration by name |
-| `elm_edit` | All file mutations: `set`, `patch`, `rm`, `mv`, `rename`, `move_decl`, `add_import`, `remove_import`, `expose`, `unexpose` |
+| `elm_edit` | All file mutations: `set`, `patch`, `rm`, `mv`, `rename`, `move_decl`, `add_variant`, `rm_variant`, `add_import`, `remove_import`, `expose`, `unexpose` |
 | `elm_refs` | Find all references to a module or declaration across the project |
 
 Configure in your MCP client (e.g. Claude Code `settings.json`):
