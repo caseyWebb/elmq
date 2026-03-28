@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    echo "Error: CLAUDE_CODE_OAUTH_TOKEN is not set." >&2
+    echo "Create benchmarks/.env with: CLAUDE_CODE_OAUTH_TOKEN=your-token-here" >&2
+    exit 1
+fi
+
 BENCH_DIR="/bench"
 FIXTURE_DIR="$BENCH_DIR/fixture"
 RESULTS_DIR="$BENCH_DIR/results"

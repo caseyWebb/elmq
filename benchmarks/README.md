@@ -12,21 +12,22 @@ Measures token usage of Claude Code with and without the elmq MCP server on iden
 
 This compiles the elmq release binary and builds the `elmq-bench` Docker image with Node, Elm, Claude Code, and the fixture project (rtfeldman/elm-spa-example).
 
-### 2. Authenticate Claude (once)
+### 2. Create auth credentials
 
-```sh
-docker run -it -v claude-auth:/root/.claude elmq-bench claude setup-token
+Run `claude setup-token` to get an OAuth token, then create `benchmarks/.env`:
+
+```
+CLAUDE_CODE_OAUTH_TOKEN=your-token-here
 ```
 
-Follow the interactive prompts. Credentials persist in the `claude-auth` Docker volume.
+This file is gitignored.
 
 ## Running Benchmarks
 
 Run both arms (control then treatment):
 
 ```sh
-docker run \
-  -v claude-auth:/root/.claude \
+docker run --env-file benchmarks/.env \
   -v "$(pwd)/benchmarks/results:/bench/results" \
   elmq-bench /bench/run.sh
 ```
@@ -34,15 +35,13 @@ docker run \
 Run a single arm:
 
 ```sh
-docker run \
-  -v claude-auth:/root/.claude \
+docker run --env-file benchmarks/.env \
   -v "$(pwd)/benchmarks/results:/bench/results" \
   elmq-bench /bench/run.sh control
 ```
 
 ```sh
-docker run \
-  -v claude-auth:/root/.claude \
+docker run --env-file benchmarks/.env \
   -v "$(pwd)/benchmarks/results:/bench/results" \
   elmq-bench /bench/run.sh treatment
 ```
