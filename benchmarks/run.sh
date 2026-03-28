@@ -84,7 +84,22 @@ run_arm() {
         # Run Claude — stream to file, print tool calls live
         cd "$work_dir"
         echo "Running Claude..."
-        if "${claude_base[@]}" -- "$prompt" 2>&1 | tee "$scenario_dir/session.json" | grep --line-buffered '"tool_use"' | jq -r '.message.content[]? | select(.type=="tool_use") | "  → \(.name)"' 2>/dev/null; then
+        if "${claude_base[@]}" -- "$prompt" 2>&1 | tee "$scenario_dir/session.json" | grep --line-buffered '"tool_use"' | jq -r '
+            .message.content[]? | select(.type=="tool_use") |
+            "  → \(.name) " + (
+                if .name == "Read" then .input.file_path // ""
+                elif .name == "Write" then .input.file_path // ""
+                elif .name == "Edit" then .input.file_path // ""
+                elif .name == "Bash" then (.input.command // "")[:80]
+                elif .name == "Glob" then .input.pattern // ""
+                elif .name == "Grep" then .input.pattern // ""
+                elif .name == "Agent" then .input.description // ""
+                elif .name == "elm_summary" then .input.file // ""
+                elif .name == "elm_get" then "\(.input.file // "") \(.input.name // "")"
+                elif .name == "elm_edit" then "\(.input.file // "") \(.input.action // "")"
+                elif .name == "elm_refs" then "\(.input.file // "") \(.input.name // "")"
+                else ""
+            end)' 2>/dev/null; then
             echo "Claude completed successfully"
         else
             echo "WARNING: Claude exited with non-zero status"
