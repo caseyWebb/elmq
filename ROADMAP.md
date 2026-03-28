@@ -38,16 +38,17 @@ Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scri
 ## Phase 3: MCP Server ✓
 
 - `elmq mcp` — stdio MCP server using `rmcp` SDK
-- 5 consolidated tools: `elm_summary`, `elm_get`, `elm_edit`, `elm_module`, `elm_refs`
+- 4 consolidated tools: `elm_summary`, `elm_get`, `elm_edit`, `elm_refs`
 - Tool descriptions optimized for token efficiency
 - Compact output as default for MCP responses
 
-## Phase 4: Multi-File Operations (in progress)
+## Phase 4: Multi-File Operations ✓
 
 - Project-aware mode (elm.json, source-directories) ✓
 - `mv` — rename a module and update imports and qualified references across the project ✓
 - `refs` — find all references to a module or declaration across the project ✓
 - `rename` — rename a declaration and update all references across the project ✓
+- `move-decl` — move declarations between modules with import-aware body rewriting, automatic helper detection, and project-wide reference updates ✓
 - Propagating edits (add type constructor → update case expressions at all use sites)
 
 ## Phase 5: Advanced

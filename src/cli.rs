@@ -136,6 +136,31 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Move declarations from one module to another, updating all references
+    MoveDecl {
+        /// Path to the source Elm file
+        file: PathBuf,
+
+        /// Names of declarations to move (can be repeated)
+        #[arg(long = "name")]
+        names: Vec<String>,
+
+        /// Path to the target Elm file
+        #[arg(long = "to")]
+        target: PathBuf,
+
+        /// Copy shared helpers instead of erroring
+        #[arg(long)]
+        copy_shared_helpers: bool,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Compact)]
+        format: Format,
+
+        /// Preview changes without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Start MCP server (stdio transport)
     Mcp,
 }

@@ -31,15 +31,23 @@ Parameters:
 - **THEN** the tool SHALL return an error indicating the declaration was not found
 
 ### Requirement: elm_edit tool
-The system SHALL provide an `elm_edit` tool that performs declaration-level mutations. The `action` parameter determines the operation.
+The system SHALL provide an `elm_edit` tool that performs all file mutations. The `action` parameter determines the operation.
 
 Parameters:
 - `file` (string, required): Path to the Elm file
-- `action` (string, required): One of `set`, `patch`, `rm`
+- `action` (string, required): One of `set`, `patch`, `rm`, `mv`, `rename`, `move_decl`, `add_import`, `remove_import`, `expose`, `unexpose`
 - `source` (string, required for `set`): Full source text of the declaration to upsert
-- `name` (string, optional for `set`, required for `patch`/`rm`): Declaration name. For `set`, defaults to the name parsed from `source`.
+- `name` (string, optional for `set`, required for `patch`/`rm`/`rename`): Declaration name
 - `old` (string, required for `patch`): Text to find within the declaration
-- `new` (string, required for `patch`): Replacement text
+- `new` (string, required for `patch`/`rename`): Replacement text or new name
+- `new_path` (string, required for `mv`): New file path for the module
+- `names` (array of strings, required for `move_decl`): Declaration names to move
+- `target` (string, required for `move_decl`): Path to target Elm file
+- `import` (string, required for `add_import`): Import clause (e.g., `Html exposing (Html, div)`)
+- `module_name` (string, required for `remove_import`): Module name to remove (e.g., `Html`)
+- `item` (string, required for `expose`/`unexpose`): Item to expose or unexpose (e.g., `update` or `Msg(..)`)
+- `copy_shared_helpers` (boolean, optional for `move_decl`): Copy shared helpers instead of erroring
+- `dry_run` (boolean, optional for `mv`/`rename`/`move_decl`): Preview without writing
 
 #### Scenario: Set (upsert) a declaration
 - **WHEN** `elm_edit` is called with `action: "set"` and `source` containing a declaration
@@ -53,36 +61,22 @@ Parameters:
 - **WHEN** `elm_edit` is called with `action: "rm"` and `name`
 - **THEN** the tool SHALL remove the named declaration (including doc comment and type annotation) and write atomically
 
-#### Scenario: Write confirmation
-- **WHEN** any `elm_edit` action completes successfully
-- **THEN** the tool SHALL return a brief confirmation message (e.g., "set update in src/Main.elm")
-
-### Requirement: elm_module tool
-The system SHALL provide an `elm_module` tool that performs module-level mutations. The `action` parameter determines the operation.
-
-Parameters:
-- `file` (string, required): Path to the Elm file
-- `action` (string, required): One of `add_import`, `remove_import`, `expose`, `unexpose`
-- `import` (string, required for `add_import`): Import clause (e.g., `Html exposing (Html, div)`)
-- `module_name` (string, required for `remove_import`): Module name to remove (e.g., `Html`)
-- `item` (string, required for `expose`/`unexpose`): Item to expose or unexpose (e.g., `update` or `Msg(..)`)
-
 #### Scenario: Add an import
-- **WHEN** `elm_module` is called with `action: "add_import"` and an `import` clause
+- **WHEN** `elm_edit` is called with `action: "add_import"` and an `import` clause
 - **THEN** the tool SHALL add or replace the import in the file and write atomically
 
 #### Scenario: Remove an import
-- **WHEN** `elm_module` is called with `action: "remove_import"` and a `module_name`
+- **WHEN** `elm_edit` is called with `action: "remove_import"` and a `module_name`
 - **THEN** the tool SHALL remove the import for that module and write atomically
 
 #### Scenario: Expose an item
-- **WHEN** `elm_module` is called with `action: "expose"` and an `item`
+- **WHEN** `elm_edit` is called with `action: "expose"` and an `item`
 - **THEN** the tool SHALL add the item to the module's exposing list and write atomically
 
 #### Scenario: Unexpose an item
-- **WHEN** `elm_module` is called with `action: "unexpose"` and an `item`
+- **WHEN** `elm_edit` is called with `action: "unexpose"` and an `item`
 - **THEN** the tool SHALL remove the item from the module's exposing list and write atomically
 
 #### Scenario: Write confirmation
-- **WHEN** any `elm_module` action completes successfully
+- **WHEN** any `elm_edit` action completes successfully
 - **THEN** the tool SHALL return a brief confirmation message
