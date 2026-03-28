@@ -23,8 +23,7 @@ COPY benchmarks/mcp-config.json /bench/mcp-config.json
 COPY benchmarks/run.sh /bench/run.sh
 COPY benchmarks/analyze.sh /bench/analyze.sh
 COPY .claude-plugin/ /bench/claude-plugin/.claude-plugin/
-COPY hooks/ /bench/claude-plugin/hooks/
-RUN chmod +x /bench/run.sh /bench/analyze.sh /bench/claude-plugin/hooks/*.sh
+RUN chmod +x /bench/run.sh /bench/analyze.sh /bench/claude-plugin/.claude-plugin/hooks/*.sh
 
 # Pre-populate elm-stuff so runs don't need network
 WORKDIR /bench/fixture
