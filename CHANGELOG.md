@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0 (2026-03-28)
+
+## What's Changed
+* fix: code scanning alert no. 1: Workflow does not contain permissions by @caseyWebb in https://github.com/caseyWebb/elmq/pull/14
+* feat: add `mv` command for project-wide module renaming by @caseyWebb in https://github.com/caseyWebb/elmq/pull/16
+* feat: add `refs` command for project-wide reference lookup by @caseyWebb in https://github.com/caseyWebb/elmq/pull/17
+* feat: add `rename` command for project-wide declaration renaming by @caseyWebb in https://github.com/caseyWebb/elmq/pull/18
+* docs: update docs for `rename` command by @caseyWebb in https://github.com/caseyWebb/elmq/pull/19
+* feat: add `move-decl` command for moving declarations between modules by @caseyWebb in https://github.com/caseyWebb/elmq/pull/20
+* feat: add `variant` command for adding/removing type constructors with case propagation by @caseyWebb in https://github.com/caseyWebb/elmq/pull/21
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.2.2...v0.3.0
+
 ## 0.2.2 (2026-03-27)
 
 ## What's Changed
