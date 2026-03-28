@@ -35,17 +35,25 @@ impl ServerHandler for ElmqServer {
             .with_instructions(
                 "Structured Elm file operations — prefer these over built-in tools for .elm files:\n\
                  \n\
-                 - elm_summary instead of Read: returns file structure (module, imports, declarations \
-                 with types/line numbers) in ~10% of the tokens. Use first to understand a file.\n\
-                 - elm_get instead of Read: extracts one declaration's full source by name. \
-                 Use when you need a specific function, type, or port.\n\
-                 - elm_edit instead of Write/Edit: atomic modifications — set/patch/rm declarations, \
-                 add/remove imports, expose/unexpose, plus project-wide: mv (rename module), \
-                 rename (rename declaration), move_decl (move between modules), \
-                 add_variant/rm_variant (propagate through case expressions). \
-                 One call replaces multi-step Read+Edit cycles.\n\
-                 - elm_refs instead of Grep: finds all references to a module or declaration, \
-                 resolving qualified, aliased, and exposed names through import context.\n\
+                 READ:\n\
+                 - elm_summary: file structure (module, imports, declarations with types/line numbers) in ~10% of the tokens\n\
+                 - elm_get: extract one declaration's full source by name\n\
+                 \n\
+                 WRITE (all atomic):\n\
+                 - elm_set: upsert a declaration\n\
+                 - elm_patch: find-replace within a declaration\n\
+                 - elm_rm: remove a declaration\n\
+                 - elm_add_import / elm_rm_import: manage imports\n\
+                 - elm_expose / elm_unexpose: manage exposing list\n\
+                 \n\
+                 PROJECT-WIDE (all atomic):\n\
+                 - elm_mv: rename/move module, update all references\n\
+                 - elm_rename: rename declaration, update all references\n\
+                 - elm_move_decl: move declarations between modules\n\
+                 - elm_add_variant / elm_rm_variant: add/remove type constructors, propagate case expressions\n\
+                 \n\
+                 SEARCH:\n\
+                 - elm_refs: find all references to a module or declaration\n\
                  \n\
                  Use Read/Write only for raw content outside declarations or creating new files from scratch.",
             )
@@ -58,101 +66,7 @@ impl ServerHandler for ElmqServer {
 
 // -- Parameter types --
 
-// Fix schemars-generated schemas for Anthropic API compatibility:
-// 1. Strip nullable type arrays ["string", "null"] → "string"
-// 2. Flatten oneOf (from serde tagged enums with flatten) into a single object
-//    schema with all variant fields as optional properties
-fn fix_schema(schema: &mut schemars::Schema) {
-    if let Some(obj) = schema.as_object_mut() {
-        // Flatten oneOf: merge all variant schemas into a single properties map
-        if let Some(one_of) = obj.remove("oneOf") {
-            if let serde_json::Value::Array(variants) = one_of {
-                let mut all_props = serde_json::Map::new();
-                let mut action_values = Vec::new();
-
-                for variant in &variants {
-                    if let Some(variant_obj) = variant.as_object() {
-                        // Collect action enum values from const fields
-                        if let Some(action_prop) = variant_obj
-                            .get("properties")
-                            .and_then(|p| p.get("action"))
-                            .and_then(|a| a.get("const"))
-                        {
-                            action_values.push(action_prop.clone());
-                        }
-                        // Merge all properties (skip "action" — we'll rebuild it)
-                        if let Some(props) = variant_obj.get("properties").and_then(|p| p.as_object())
-                        {
-                            for (k, v) in props {
-                                if k != "action" {
-                                    all_props.entry(k.clone()).or_insert_with(|| v.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Build the action enum property
-                all_props.insert(
-                    "action".to_owned(),
-                    serde_json::json!({
-                        "type": "string",
-                        "enum": action_values,
-                        "description": "The edit action to perform"
-                    }),
-                );
-
-                // Merge into existing properties
-                if let Some(existing_props) = obj
-                    .get_mut("properties")
-                    .and_then(|p| p.as_object_mut())
-                {
-                    for (k, v) in all_props {
-                        existing_props.entry(k).or_insert(v);
-                    }
-                } else {
-                    obj.insert(
-                        "properties".to_owned(),
-                        serde_json::Value::Object(all_props),
-                    );
-                }
-
-                // Set required and type
-                obj.insert(
-                    "required".to_owned(),
-                    serde_json::json!(["file", "action"]),
-                );
-                obj.insert(
-                    "type".to_owned(),
-                    serde_json::json!("object"),
-                );
-            }
-        }
-
-        // Strip nullable type arrays in all properties
-        if let Some(props) = obj.get_mut("properties") {
-            if let Some(props_obj) = props.as_object_mut() {
-                for (_key, prop) in props_obj.iter_mut() {
-                    if let Some(prop_obj) = prop.as_object_mut() {
-                        if let Some(serde_json::Value::Array(types)) = prop_obj.get("type") {
-                            let non_null: Vec<_> = types
-                                .iter()
-                                .filter(|t| t.as_str() != Some("null"))
-                                .cloned()
-                                .collect();
-                            if non_null.len() == 1 {
-                                prop_obj.insert("type".to_owned(), non_null[0].clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(transform = fix_schema)]
 pub struct SummaryParams {
     /// Path to the Elm file
     pub file: String,
@@ -163,7 +77,6 @@ pub struct SummaryParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(transform = fix_schema)]
 pub struct GetParams {
     /// Path to the Elm file
     pub file: String,
@@ -174,108 +87,128 @@ pub struct GetParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(transform = fix_schema)]
-pub struct EditParams {
+pub struct SetParams {
     /// Path to the Elm file
     pub file: String,
-    /// Action and its parameters
-    #[serde(flatten)]
-    pub action: EditAction,
+    /// Full source text of the declaration
+    pub source: String,
+    /// Override the declaration name (default: parsed from source)
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub enum EditAction {
-    /// Upsert a declaration from source text
-    Set {
-        /// Full source text of the declaration
-        source: String,
-        /// Override the declaration name (default: parsed from source)
-        name: Option<String>,
-    },
-    /// Find-and-replace within a declaration
-    Patch {
-        /// Name of the declaration to patch
-        name: String,
-        /// Text to find within the declaration
-        old: String,
-        /// Replacement text
-        new: String,
-    },
-    /// Remove a declaration
-    Rm {
-        /// Name of the declaration to remove
-        name: String,
-    },
-    /// Rename/move a module file and update all imports and qualified references across the project
-    Mv {
-        /// New file path for the module
-        new_path: String,
-        /// If true, preview changes without writing
-        dry_run: Option<bool>,
-    },
-    /// Rename a declaration and update all references across the project
-    Rename {
-        /// Current name of the declaration
-        name: String,
-        /// New name for the declaration
-        new: String,
-        /// If true, preview changes without writing
-        dry_run: Option<bool>,
-    },
-    /// Move declarations from one module to another, updating all references across the project
-    MoveDecl {
-        /// Names of declarations to move
-        names: Vec<String>,
-        /// Path to the target Elm file
-        target: String,
-        /// Copy shared helpers instead of erroring
-        copy_shared_helpers: Option<bool>,
-        /// If true, preview changes without writing
-        dry_run: Option<bool>,
-    },
-    /// Add or replace an import clause
-    AddImport {
-        /// Import clause, e.g. "Html exposing (Html, div)"
-        import: String,
-    },
-    /// Remove an import by module name
-    RemoveImport {
-        /// Module name to remove, e.g. "Html"
-        module_name: String,
-    },
-    /// Add an item to the module's exposing list
-    Expose {
-        /// Item to expose, e.g. "update" or "Msg(..)"
-        item: String,
-    },
-    /// Remove an item from the module's exposing list
-    Unexpose {
-        /// Item to unexpose, e.g. "helper"
-        item: String,
-    },
-    /// Add a constructor to a custom type and insert branches in all case expressions project-wide
-    AddVariant {
-        /// Name of the custom type (e.g. "Msg")
-        type_name: String,
-        /// Variant definition (e.g. "SetName String")
-        definition: String,
-        /// If true, preview changes without writing
-        dry_run: Option<bool>,
-    },
-    /// Remove a constructor from a custom type and remove branches from all case expressions project-wide
-    RmVariant {
-        /// Name of the custom type (e.g. "Msg")
-        type_name: String,
-        /// Constructor name to remove (e.g. "Decrement")
-        constructor: String,
-        /// If true, preview changes without writing
-        dry_run: Option<bool>,
-    },
+pub struct PatchParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Name of the declaration to patch
+    pub name: String,
+    /// Text to find within the declaration
+    pub old: String,
+    /// Replacement text
+    pub new: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[schemars(transform = fix_schema)]
+pub struct RmParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Name of the declaration to remove
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AddImportParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Import clause, e.g. "Html exposing (Html, div)"
+    pub import: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RmImportParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Module name to remove, e.g. "Html"
+    pub module_name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExposeParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Item to expose, e.g. "update" or "Msg(..)"
+    pub item: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UnexposeParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Item to unexpose, e.g. "helper"
+    pub item: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MvParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// New file path for the module
+    pub new_path: String,
+    /// If true, preview changes without writing
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RenameParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Current name of the declaration
+    pub name: String,
+    /// New name for the declaration
+    pub new: String,
+    /// If true, preview changes without writing
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MoveDeclParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Names of declarations to move
+    pub names: Vec<String>,
+    /// Path to the target Elm file
+    pub target: String,
+    /// Copy shared helpers instead of erroring
+    pub copy_shared_helpers: Option<bool>,
+    /// If true, preview changes without writing
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AddVariantParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Name of the custom type (e.g. "Msg")
+    pub type_name: String,
+    /// Variant definition (e.g. "SetName String")
+    pub definition: String,
+    /// If true, preview changes without writing
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RmVariantParams {
+    /// Path to the Elm file
+    pub file: String,
+    /// Name of the custom type (e.g. "Msg")
+    pub type_name: String,
+    /// Constructor name to remove (e.g. "Decrement")
+    pub constructor: String,
+    /// If true, preview changes without writing
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RefsParams {
     /// Path to the Elm file whose module to search for
     pub file: String,
@@ -485,133 +418,198 @@ impl ElmqServer {
     }
 
     #[tool(
-        name = "elm_edit",
-        description = "Modify an Elm file. Actions: \"set\" (upsert declaration), \"patch\" (find-replace in declaration), \"rm\" (remove declaration), \"mv\" (rename module across project), \"rename\" (rename declaration across project), \"move_decl\" (move declarations to another module), \"add_import\" (add/replace import), \"remove_import\" (remove import), \"expose\" (add to exposing list), \"unexpose\" (remove from exposing list), \"add_variant\" (add constructor to custom type, insert case branches project-wide), \"rm_variant\" (remove constructor from custom type, remove case branches project-wide). All writes are atomic."
+        name = "elm_set",
+        description = "Upsert a declaration (function, type, type alias, or port) in an Elm file. Inserts if new, replaces if it already exists. Atomic write."
     )]
-    fn elm_edit(&self, Parameters(params): Parameters<EditParams>) -> Result<String, String> {
-        match params.action {
-            EditAction::Set {
-                source: new_source,
-                name,
-            } => {
-                let (source, summary) = load_and_parse(&params.file)?;
-                let path = validate_path(&params.file)?;
+    fn elm_set(&self, Parameters(params): Parameters<SetParams>) -> Result<String, String> {
+        let (source, summary) = load_and_parse(&params.file)?;
+        let path = validate_path(&params.file)?;
 
-                let decl_name = if let Some(name) = &name {
-                    name.clone()
-                } else {
-                    parser::extract_declaration_name(&new_source)
-                        .ok_or("could not parse declaration name from source (provide \"name\")")?
-                };
+        let decl_name = if let Some(name) = &params.name {
+            name.clone()
+        } else {
+            parser::extract_declaration_name(&params.source)
+                .ok_or("could not parse declaration name from source (provide \"name\")")?
+        };
 
-                let result = writer::upsert_declaration(&source, &summary, &decl_name, &new_source);
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("set {decl_name} in {}", params.file))
-            }
-            EditAction::Patch { name, old, new } => {
-                let (source, summary) = load_and_parse(&params.file)?;
-                let path = validate_path(&params.file)?;
+        let result = writer::upsert_declaration(&source, &summary, &decl_name, &params.source);
+        writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+        Ok(format!("set {decl_name} in {}", params.file))
+    }
 
-                let result = writer::patch_declaration(&source, &summary, &name, &old, &new)
-                    .map_err(|e| e.to_string())?;
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("patched {name} in {}", params.file))
-            }
-            EditAction::Rm { name } => {
-                let (source, summary) = load_and_parse(&params.file)?;
-                let path = validate_path(&params.file)?;
+    #[tool(
+        name = "elm_patch",
+        description = "Find-and-replace text within a specific declaration in an Elm file. Atomic write."
+    )]
+    fn elm_patch(&self, Parameters(params): Parameters<PatchParams>) -> Result<String, String> {
+        let (source, summary) = load_and_parse(&params.file)?;
+        let path = validate_path(&params.file)?;
 
-                let result = writer::remove_declaration(&source, &summary, &name)
-                    .map_err(|e| e.to_string())?;
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("removed {name} from {}", params.file))
-            }
-            EditAction::Mv {
-                ref new_path,
-                dry_run,
-            } => self.handle_mv(&params.file, new_path, dry_run.unwrap_or(false)),
-            EditAction::Rename {
-                ref name,
-                ref new,
-                dry_run,
-            } => self.handle_rename(&params.file, name, new, dry_run.unwrap_or(false)),
-            EditAction::MoveDecl {
-                ref names,
-                ref target,
-                copy_shared_helpers,
-                dry_run,
-            } => self.handle_move_decl(
-                &params.file,
-                names,
-                target,
-                copy_shared_helpers.unwrap_or(false),
-                dry_run.unwrap_or(false),
-            ),
-            EditAction::AddImport { import } => {
-                let (source, summary) = load_and_parse(&params.file)?;
-                let path = validate_path(&params.file)?;
+        let result =
+            writer::patch_declaration(&source, &summary, &params.name, &params.old, &params.new)
+                .map_err(|e| e.to_string())?;
+        writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+        Ok(format!("patched {} in {}", params.name, params.file))
+    }
 
-                let result = writer::add_import(&source, &summary, &import);
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("added import in {}", params.file))
-            }
-            EditAction::RemoveImport { module_name } => {
-                let (source, _summary) = load_and_parse(&params.file)?;
-                let path = validate_path(&params.file)?;
+    #[tool(
+        name = "elm_rm",
+        description = "Remove a declaration (and its type annotation and doc comment) from an Elm file. Atomic write."
+    )]
+    fn elm_rm(&self, Parameters(params): Parameters<RmParams>) -> Result<String, String> {
+        let (source, summary) = load_and_parse(&params.file)?;
+        let path = validate_path(&params.file)?;
 
-                let result =
-                    writer::remove_import(&source, &module_name).map_err(|e| e.to_string())?;
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("removed import {module_name} from {}", params.file))
-            }
-            EditAction::Expose { item } => {
-                let (source, summary) = load_and_parse(&params.file)?;
-                let path = validate_path(&params.file)?;
+        let result = writer::remove_declaration(&source, &summary, &params.name)
+            .map_err(|e| e.to_string())?;
+        writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+        Ok(format!("removed {} from {}", params.name, params.file))
+    }
 
-                let result = writer::expose(&source, &summary, &item).map_err(|e| e.to_string())?;
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("exposed {item} in {}", params.file))
-            }
-            EditAction::Unexpose { item } => {
-                let (source, summary) = load_and_parse(&params.file)?;
-                let path = validate_path(&params.file)?;
+    #[tool(
+        name = "elm_add_import",
+        description = "Add or replace an import clause in an Elm file. Atomic write."
+    )]
+    fn elm_add_import(
+        &self,
+        Parameters(params): Parameters<AddImportParams>,
+    ) -> Result<String, String> {
+        let (source, summary) = load_and_parse(&params.file)?;
+        let path = validate_path(&params.file)?;
 
-                let result =
-                    writer::unexpose(&source, &summary, &item).map_err(|e| e.to_string())?;
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("unexposed {item} in {}", params.file))
-            }
-            EditAction::AddVariant {
-                type_name,
-                definition,
-                dry_run,
-            } => {
-                let path = validate_path(&params.file)?;
-                let result = elmq::variant::execute_add_variant(
-                    &path,
-                    &type_name,
-                    &definition,
-                    dry_run.unwrap_or(false),
-                )
-                .map_err(|e: anyhow::Error| e.to_string())?;
-                serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {e}"))
-            }
-            EditAction::RmVariant {
-                type_name,
-                constructor,
-                dry_run,
-            } => {
-                let path = validate_path(&params.file)?;
-                let result = elmq::variant::execute_rm_variant(
-                    &path,
-                    &type_name,
-                    &constructor,
-                    dry_run.unwrap_or(false),
-                )
-                .map_err(|e: anyhow::Error| e.to_string())?;
-                serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {e}"))
-            }
-        }
+        let result = writer::add_import(&source, &summary, &params.import);
+        writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+        Ok(format!("added import in {}", params.file))
+    }
+
+    #[tool(
+        name = "elm_rm_import",
+        description = "Remove an import by module name from an Elm file. Atomic write."
+    )]
+    fn elm_rm_import(
+        &self,
+        Parameters(params): Parameters<RmImportParams>,
+    ) -> Result<String, String> {
+        let (source, _summary) = load_and_parse(&params.file)?;
+        let path = validate_path(&params.file)?;
+
+        let result =
+            writer::remove_import(&source, &params.module_name).map_err(|e| e.to_string())?;
+        writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+        Ok(format!(
+            "removed import {} from {}",
+            params.module_name, params.file
+        ))
+    }
+
+    #[tool(
+        name = "elm_expose",
+        description = "Add an item to the module's exposing list in an Elm file. Atomic write."
+    )]
+    fn elm_expose(&self, Parameters(params): Parameters<ExposeParams>) -> Result<String, String> {
+        let (source, summary) = load_and_parse(&params.file)?;
+        let path = validate_path(&params.file)?;
+
+        let result = writer::expose(&source, &summary, &params.item).map_err(|e| e.to_string())?;
+        writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+        Ok(format!("exposed {} in {}", params.item, params.file))
+    }
+
+    #[tool(
+        name = "elm_unexpose",
+        description = "Remove an item from the module's exposing list in an Elm file. Atomic write."
+    )]
+    fn elm_unexpose(
+        &self,
+        Parameters(params): Parameters<UnexposeParams>,
+    ) -> Result<String, String> {
+        let (source, summary) = load_and_parse(&params.file)?;
+        let path = validate_path(&params.file)?;
+
+        let result =
+            writer::unexpose(&source, &summary, &params.item).map_err(|e| e.to_string())?;
+        writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+        Ok(format!("unexposed {} in {}", params.item, params.file))
+    }
+
+    #[tool(
+        name = "elm_mv",
+        description = "Rename/move an Elm module file and update all imports and qualified references across the project. Atomic writes."
+    )]
+    fn elm_mv(&self, Parameters(params): Parameters<MvParams>) -> Result<String, String> {
+        self.handle_mv(
+            &params.file,
+            &params.new_path,
+            params.dry_run.unwrap_or(false),
+        )
+    }
+
+    #[tool(
+        name = "elm_rename",
+        description = "Rename a declaration and update all references across the Elm project. Atomic writes."
+    )]
+    fn elm_rename(&self, Parameters(params): Parameters<RenameParams>) -> Result<String, String> {
+        self.handle_rename(
+            &params.file,
+            &params.name,
+            &params.new,
+            params.dry_run.unwrap_or(false),
+        )
+    }
+
+    #[tool(
+        name = "elm_move_decl",
+        description = "Move declarations from one Elm module to another with import-aware body rewriting and project-wide reference updates. Atomic writes."
+    )]
+    fn elm_move_decl(
+        &self,
+        Parameters(params): Parameters<MoveDeclParams>,
+    ) -> Result<String, String> {
+        self.handle_move_decl(
+            &params.file,
+            &params.names,
+            &params.target,
+            params.copy_shared_helpers.unwrap_or(false),
+            params.dry_run.unwrap_or(false),
+        )
+    }
+
+    #[tool(
+        name = "elm_add_variant",
+        description = "Add a constructor to a custom type and insert branches in all case expressions project-wide. Atomic writes."
+    )]
+    fn elm_add_variant(
+        &self,
+        Parameters(params): Parameters<AddVariantParams>,
+    ) -> Result<String, String> {
+        let path = validate_path(&params.file)?;
+        let result = elmq::variant::execute_add_variant(
+            &path,
+            &params.type_name,
+            &params.definition,
+            params.dry_run.unwrap_or(false),
+        )
+        .map_err(|e: anyhow::Error| e.to_string())?;
+        serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {e}"))
+    }
+
+    #[tool(
+        name = "elm_rm_variant",
+        description = "Remove a constructor from a custom type and remove branches from all case expressions project-wide. Atomic writes."
+    )]
+    fn elm_rm_variant(
+        &self,
+        Parameters(params): Parameters<RmVariantParams>,
+    ) -> Result<String, String> {
+        let path = validate_path(&params.file)?;
+        let result = elmq::variant::execute_rm_variant(
+            &path,
+            &params.type_name,
+            &params.constructor,
+            params.dry_run.unwrap_or(false),
+        )
+        .map_err(|e: anyhow::Error| e.to_string())?;
+        serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {e}"))
     }
 
     #[tool(

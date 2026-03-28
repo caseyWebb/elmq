@@ -31,7 +31,16 @@ IMPORTANT: This is an Elm project. You MUST use the elmq MCP tools instead of bu
 RULES:
 1. To understand a file's structure: use elm_summary (NOT Read). Returns module line, imports, all declarations with types and line numbers in ~10% of the tokens.
 2. To read a specific function, type, or port: use elm_get with the declaration name (NOT Read). Returns just that declaration's source.
-3. To modify any .elm file: use elm_edit (NOT Write or Edit). Supports: action "set" (upsert declaration), "patch" (find-replace in declaration), "rm" (remove declaration), "add_import"/"remove_import" (manage imports), "expose"/"unexpose" (manage exposing list), "mv" (rename/move module project-wide), "rename" (rename declaration project-wide), "move_decl" (move declarations between modules), "add_variant"/"rm_variant" (add/remove type constructors and propagate through case expressions).
+3. To modify any .elm file (NOT Write or Edit), use the appropriate tool:
+   - elm_set: upsert a declaration
+   - elm_patch: find-replace within a declaration
+   - elm_rm: remove a declaration
+   - elm_add_import / elm_rm_import: manage imports
+   - elm_expose / elm_unexpose: manage exposing list
+   - elm_mv: rename/move module project-wide
+   - elm_rename: rename declaration project-wide
+   - elm_move_decl: move declarations between modules
+   - elm_add_variant / elm_rm_variant: add/remove type constructors, propagate case expressions
 4. To find references: use elm_refs (NOT Grep). Resolves qualified, aliased, and exposed names through import context.
 
 The ONLY acceptable uses of built-in tools on .elm files:

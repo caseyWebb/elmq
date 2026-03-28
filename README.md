@@ -283,13 +283,24 @@ Start the MCP server (stdio transport):
 elmq mcp
 ```
 
-Exposes 4 tools optimized for LLM agents:
+Exposes 15 tools optimized for LLM agents:
 
 | Tool | Description |
 |------|-------------|
 | `elm_summary` | File overview: module, imports, declarations with types and line numbers |
 | `elm_get` | Extract full source text of a declaration by name |
-| `elm_edit` | All file mutations: `set`, `patch`, `rm`, `mv`, `rename`, `move_decl`, `add_variant`, `rm_variant`, `add_import`, `remove_import`, `expose`, `unexpose` |
+| `elm_set` | Upsert a declaration (insert or replace) |
+| `elm_patch` | Find-and-replace within a specific declaration |
+| `elm_rm` | Remove a declaration |
+| `elm_add_import` | Add or replace an import clause |
+| `elm_rm_import` | Remove an import by module name |
+| `elm_expose` | Add an item to the module's exposing list |
+| `elm_unexpose` | Remove an item from the module's exposing list |
+| `elm_mv` | Rename/move a module, update all references project-wide |
+| `elm_rename` | Rename a declaration, update all references project-wide |
+| `elm_move_decl` | Move declarations between modules with import-aware rewriting |
+| `elm_add_variant` | Add a type constructor, propagate case expressions project-wide |
+| `elm_rm_variant` | Remove a type constructor, remove case branches project-wide |
 | `elm_refs` | Find all references to a module or declaration across the project |
 
 ### Claude Code Plugin

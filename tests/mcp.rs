@@ -171,9 +171,20 @@ fn tools_list() {
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"elm_summary"));
     assert!(names.contains(&"elm_get"));
-    assert!(names.contains(&"elm_edit"));
+    assert!(names.contains(&"elm_set"));
+    assert!(names.contains(&"elm_patch"));
+    assert!(names.contains(&"elm_rm"));
+    assert!(names.contains(&"elm_add_import"));
+    assert!(names.contains(&"elm_rm_import"));
+    assert!(names.contains(&"elm_expose"));
+    assert!(names.contains(&"elm_unexpose"));
+    assert!(names.contains(&"elm_mv"));
+    assert!(names.contains(&"elm_rename"));
+    assert!(names.contains(&"elm_move_decl"));
+    assert!(names.contains(&"elm_add_variant"));
+    assert!(names.contains(&"elm_rm_variant"));
     assert!(names.contains(&"elm_refs"));
-    assert_eq!(names.len(), 4);
+    assert_eq!(names.len(), 15);
 
     drop(stdin);
     let _ = child.wait();
@@ -256,7 +267,7 @@ fn get_declaration_not_found() {
     assert!(result_text(&resp).contains("not found"));
 }
 
-// -- elm_edit tests --
+// -- elm_set tests --
 
 #[test]
 fn edit_set_declaration() {
@@ -265,10 +276,9 @@ fn edit_set_declaration() {
     std::fs::write(&file, "module Test exposing (foo)\n\n\nfoo =\n    42\n").unwrap();
 
     let resp = call_tool(
-        "elm_edit",
+        "elm_set",
         serde_json::json!({
             "file": file.to_str().unwrap(),
-            "action": "set",
             "source": "bar =\n    99\n"
         }),
     );
@@ -279,6 +289,8 @@ fn edit_set_declaration() {
     assert!(content.contains("bar =\n    99"));
 }
 
+// -- elm_patch tests --
+
 #[test]
 fn edit_patch_declaration() {
     let dir = tempfile::tempdir_in(".").unwrap();
@@ -286,10 +298,9 @@ fn edit_patch_declaration() {
     std::fs::write(&file, "module Test exposing (foo)\n\n\nfoo =\n    42\n").unwrap();
 
     let resp = call_tool(
-        "elm_edit",
+        "elm_patch",
         serde_json::json!({
             "file": file.to_str().unwrap(),
-            "action": "patch",
             "name": "foo",
             "old": "42",
             "new": "99"
@@ -303,6 +314,8 @@ fn edit_patch_declaration() {
     assert!(!content.contains("42"));
 }
 
+// -- elm_rm tests --
+
 #[test]
 fn edit_rm_declaration() {
     let dir = tempfile::tempdir_in(".").unwrap();
@@ -314,10 +327,9 @@ fn edit_rm_declaration() {
     .unwrap();
 
     let resp = call_tool(
-        "elm_edit",
+        "elm_rm",
         serde_json::json!({
             "file": file.to_str().unwrap(),
-            "action": "rm",
             "name": "foo"
         }),
     );
@@ -329,26 +341,14 @@ fn edit_rm_declaration() {
     assert!(content.contains("bar"));
 }
 
-#[test]
-fn edit_invalid_action() {
-    let resp = call_tool(
-        "elm_edit",
-        serde_json::json!({
-            "file": "test-fixtures/Sample.elm",
-            "action": "invalid"
-        }),
-    );
-    // serde rejects unknown enum variants at the protocol level
-    assert!(resp.get("error").is_some() || is_error(&resp));
-}
+// -- elm_patch missing params test --
 
 #[test]
 fn edit_missing_required_params() {
     let resp = call_tool(
-        "elm_edit",
+        "elm_patch",
         serde_json::json!({
             "file": "test-fixtures/Sample.elm",
-            "action": "patch",
             "name": "update"
         }),
     );
@@ -356,7 +356,7 @@ fn edit_missing_required_params() {
     assert!(resp.get("error").is_some() || is_error(&resp));
 }
 
-// -- elm_edit import/expose tests --
+// -- elm_add_import / elm_rm_import tests --
 
 #[test]
 fn module_add_import() {
@@ -369,10 +369,9 @@ fn module_add_import() {
     .unwrap();
 
     let resp = call_tool(
-        "elm_edit",
+        "elm_add_import",
         serde_json::json!({
             "file": file.to_str().unwrap(),
-            "action": "add_import",
             "import": "Json.Decode exposing (Decoder)"
         }),
     );
@@ -393,10 +392,9 @@ fn module_remove_import() {
     .unwrap();
 
     let resp = call_tool(
-        "elm_edit",
+        "elm_rm_import",
         serde_json::json!({
             "file": file.to_str().unwrap(),
-            "action": "remove_import",
             "module_name": "Html"
         }),
     );
@@ -406,6 +404,8 @@ fn module_remove_import() {
     assert!(!content.contains("import Html"));
     assert!(content.contains("import Json.Decode"));
 }
+
+// -- elm_expose / elm_unexpose tests --
 
 #[test]
 fn module_expose() {
@@ -418,10 +418,9 @@ fn module_expose() {
     .unwrap();
 
     let resp = call_tool(
-        "elm_edit",
+        "elm_expose",
         serde_json::json!({
             "file": file.to_str().unwrap(),
-            "action": "expose",
             "item": "bar"
         }),
     );
@@ -443,10 +442,9 @@ fn module_unexpose() {
     .unwrap();
 
     let resp = call_tool(
-        "elm_edit",
+        "elm_unexpose",
         serde_json::json!({
             "file": file.to_str().unwrap(),
-            "action": "unexpose",
             "item": "bar"
         }),
     );
@@ -456,20 +454,7 @@ fn module_unexpose() {
     assert!(content.contains("exposing (foo)"));
 }
 
-#[test]
-fn module_invalid_action() {
-    let resp = call_tool(
-        "elm_edit",
-        serde_json::json!({
-            "file": "test-fixtures/Sample.elm",
-            "action": "invalid"
-        }),
-    );
-    // serde rejects unknown enum variants at the protocol level
-    assert!(resp.get("error").is_some() || is_error(&resp));
-}
-
-// -- elm_edit mv tests --
+// -- elm_mv tests --
 
 fn call_tool_in_dir(dir: &std::path::Path, name: &str, args: Value) -> Value {
     let mut child = Command::new(env!("CARGO_BIN_EXE_elmq"))
@@ -564,10 +549,9 @@ fn edit_mv_renames_module() {
 
     let resp = call_tool_in_dir(
         root,
-        "elm_edit",
+        "elm_mv",
         serde_json::json!({
             "file": "src/Foo/Bar.elm",
-            "action": "mv",
             "new_path": "src/Foo/Baz.elm"
         }),
     );
@@ -597,10 +581,9 @@ fn edit_mv_dry_run() {
 
     let resp = call_tool_in_dir(
         root,
-        "elm_edit",
+        "elm_mv",
         serde_json::json!({
             "file": "src/Foo.elm",
-            "action": "mv",
             "new_path": "src/Bar.elm",
             "dry_run": true
         }),
@@ -625,10 +608,9 @@ fn edit_mv_missing_new_path() {
 
     let resp = call_tool_in_dir(
         root,
-        "elm_edit",
+        "elm_mv",
         serde_json::json!({
-            "file": "src/Foo.elm",
-            "action": "mv"
+            "file": "src/Foo.elm"
         }),
     );
     // serde rejects missing required fields at the protocol level
