@@ -1,0 +1,3 @@
+[submodule "benchmarks/fixture"]
+	path = benchmarks/fixture
+	url = https://github.com/rtfeldman/elm-spa-example.git
