@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 
-# Only emit guidance in Elm projects
-if [ ! -f elm.json ]; then
+# Only emit guidance in Elm projects — check cwd and ancestors
+find_elm_json() {
+    local dir="$PWD"
+    while [ "$dir" != "/" ]; do
+        if [ -f "$dir/elm.json" ]; then
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+if ! find_elm_json; then
     exit 0
 fi
 
