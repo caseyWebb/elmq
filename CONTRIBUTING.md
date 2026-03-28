@@ -43,7 +43,7 @@ src/
 
 ## Testing
 
-Unit tests live alongside the code in `parser.rs`, `writer.rs`, `project.rs`, and `refs.rs`. Integration tests are in `tests/` with one file per command (`get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `mcp.rs`). Run with `cargo test`.
+Unit tests live alongside the code in `parser.rs`, `writer.rs`, `project.rs`, and `refs.rs`. Integration tests are in `tests/` with one file per command (`get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `mcp.rs`). Run with `cargo test`.
 
 Test fixtures are in `test-fixtures/`. When adding parser features, add or update the sample Elm files there and write corresponding tests. Integration tests use `tempfile` to create temporary copies for write operations.
 

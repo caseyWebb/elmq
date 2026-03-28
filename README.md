@@ -154,6 +154,20 @@ updated src/Page/Home.elm
 
 Renames the file, updates the module declaration, and rewrites all imports and qualified references (`Foo.Bar.something` -> `Foo.Baz.something`) across the project. Requires `elm.json` in a parent directory. Use `--dry-run` to preview changes without writing.
 
+### Rename a declaration
+
+```sh
+elmq rename src/Main.elm helper newHelper
+```
+
+```
+renamed helper -> newHelper
+updated src/Main.elm
+updated src/Page/Home.elm
+```
+
+Renames a declaration (function, type, type alias, port, or variant) in the defining file and updates all references across the project — including qualified (`Module.helper`), aliased (`M.helper`), and exposed references. Requires `elm.json` in a parent directory. Use `--dry-run` to preview changes without writing.
+
 ### Find references
 
 ```sh
@@ -216,7 +230,7 @@ Exposes 5 tools optimized for LLM agents:
 |------|-------------|
 | `elm_summary` | File overview: module, imports, declarations with types and line numbers |
 | `elm_get` | Extract full source text of a declaration by name |
-| `elm_edit` | Modify declarations: `set` (upsert), `patch` (find-replace), `rm` (remove), `mv` (rename module across project) |
+| `elm_edit` | Modify declarations: `set` (upsert), `patch` (find-replace), `rm` (remove), `mv` (rename module across project), `rename` (rename declaration across project) |
 | `elm_module` | Manage imports and exposing list: `add_import`, `remove_import`, `expose`, `unexpose` |
 | `elm_refs` | Find all references to a module or declaration across the project |
 
