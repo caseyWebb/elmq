@@ -16,6 +16,7 @@ RUN npm install -g elm@0.19.1-6 @anthropic-ai/claude-code
 COPY --from=builder /build/target/release/elmq /usr/local/bin/elmq
 
 COPY benchmarks/fixture/ /bench/fixture/
+RUN rm -rf /bench/fixture/.git
 COPY benchmarks/scenarios/ /bench/scenarios/
 COPY benchmarks/system-prompt.md /bench/system-prompt.md
 COPY benchmarks/mcp-config.json /bench/mcp-config.json

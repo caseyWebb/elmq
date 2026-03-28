@@ -41,7 +41,8 @@ run_arm() {
     mkdir -p "$run_dir"
     cp -r "$FIXTURE_DIR" "$work_dir"
 
-    # Initialize git repo in working copy
+    # Remove submodule .git reference and initialize a fresh repo
+    rm -rf "$work_dir/.git"
     cd "$work_dir"
     git init -q
     git add -A
