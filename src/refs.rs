@@ -75,19 +75,21 @@ pub fn find_refs(
 }
 
 /// Information about how a target module is imported in a file.
-struct ImportInfo {
+pub(crate) struct ImportInfo {
     /// Line number of the import statement (1-based).
-    import_line: usize,
+    pub(crate) import_line: usize,
     /// The full module name (e.g., "Lib.MyModule").
-    module_name: String,
+    pub(crate) module_name: String,
     /// Alias if present (e.g., "LM" from `import Lib.MyModule as LM`).
-    alias: Option<String>,
+    pub(crate) alias: Option<String>,
     /// Explicitly exposed names (e.g., ["someFunc", "Model"] from `exposing (someFunc, Model)`).
-    exposed_names: Vec<String>,
+    pub(crate) exposed_names: Vec<String>,
+    /// Types whose constructors are exposed (e.g., ["Msg"] from `exposing (Msg(..))`).
+    pub(crate) exposed_constructors_of: Vec<String>,
 }
 
 /// Parse import clauses to find if/how the target module is imported.
-fn parse_imports(root: &Node, source: &str, target_module: &str) -> Option<ImportInfo> {
+pub(crate) fn parse_imports(root: &Node, source: &str, target_module: &str) -> Option<ImportInfo> {
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
         if child.kind() != "import_clause" {
@@ -113,9 +115,9 @@ fn parse_imports(root: &Node, source: &str, target_module: &str) -> Option<Impor
             .and_then(|name_node| name_node.utf8_text(source.as_bytes()).ok())
             .map(|s| s.to_string());
 
-        let exposed_names = child
+        let (exposed_names, exposed_constructors_of) = child
             .child_by_field_name("exposing")
-            .map(|exposing_list| extract_exposed_names(&exposing_list, source))
+            .map(|exposing_list| extract_exposed_info(&exposing_list, source))
             .unwrap_or_default();
 
         return Some(ImportInfo {
@@ -123,32 +125,43 @@ fn parse_imports(root: &Node, source: &str, target_module: &str) -> Option<Impor
             module_name: module_name.to_string(),
             alias,
             exposed_names,
+            exposed_constructors_of,
         });
     }
 
     None
 }
 
-/// Extract explicitly exposed names from an exposing list node.
-/// Skips `..` (exposing all).
-fn extract_exposed_names(exposing_list: &Node, source: &str) -> Vec<String> {
+/// Extract exposed names and types-with-constructors from an exposing list.
+/// Returns (exposed_names, exposed_constructors_of) where exposed_constructors_of
+/// contains type names that are exposed with `(..)` (e.g., `Msg` from `Msg(..)`).
+fn extract_exposed_info(exposing_list: &Node, source: &str) -> (Vec<String>, Vec<String>) {
     let mut names = Vec::new();
+    let mut constructors_of = Vec::new();
     let mut cursor = exposing_list.walk();
     for child in exposing_list.named_children(&mut cursor) {
         match child.kind() {
-            "exposed_value" | "exposed_type" => {
+            "exposed_value" => {
                 if let Ok(text) = child.utf8_text(source.as_bytes()) {
-                    // For exposed types like "Model(..)", extract just the name.
+                    names.push(text.to_string());
+                }
+            }
+            "exposed_type" => {
+                if let Ok(text) = child.utf8_text(source.as_bytes()) {
                     let name = text.split('(').next().unwrap_or(text).trim();
                     if name != ".." {
                         names.push(name.to_string());
+                        // Track if this type exposes its constructors.
+                        if text.contains("(..)") {
+                            constructors_of.push(name.to_string());
+                        }
                     }
                 }
             }
             _ => {}
         }
     }
-    names
+    (names, constructors_of)
 }
 
 /// Collect all reference sites for a specific declaration in a file.
@@ -186,6 +199,8 @@ fn collect_qualified_refs(
     display_path: &str,
     matches: &mut Vec<RefMatch>,
 ) {
+    let is_exposed = import_info.exposed_names.iter().any(|n| n == decl_name);
+
     match node.kind() {
         "value_qid" | "upper_case_qid" => {
             if let Ok(text) = node.utf8_text(source.as_bytes()) {
@@ -199,7 +214,8 @@ fn collect_qualified_refs(
                 {
                     suffix == decl_name
                 } else {
-                    false
+                    // Bare reference (no dots) — match if explicitly exposed.
+                    is_exposed && text == decl_name
                 };
 
                 if is_match {
@@ -374,13 +390,44 @@ mod tests {
         let project = Project::discover(root).unwrap();
         let refs = find_refs(&project, "Lib.Utils", Some("helper")).unwrap();
 
-        assert_eq!(refs.len(), 1);
+        // Should report both the import line and the bare usage site.
+        assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].file, "src/Main.elm");
         assert_eq!(refs[0].line, 3);
         assert_eq!(
             refs[0].text.as_deref(),
             Some("import Lib.Utils exposing (helper)")
         );
+        assert_eq!(refs[1].file, "src/Main.elm");
+        assert_eq!(refs[1].line, 5);
+        assert_eq!(refs[1].text.as_deref(), Some("main = helper"));
+    }
+
+    #[test]
+    fn test_exposed_type_ref() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        create_test_project(root, &["src"]);
+
+        write_elm(
+            root,
+            "src/Lib/Types.elm",
+            "module Lib.Types exposing (Model)\n\ntype alias Model = { name : String }\n",
+        );
+        write_elm(
+            root,
+            "src/Main.elm",
+            "module Main exposing (..)\n\nimport Lib.Types exposing (Model)\n\ntype alias Page = Model\n",
+        );
+
+        let project = Project::discover(root).unwrap();
+        let refs = find_refs(&project, "Lib.Types", Some("Model")).unwrap();
+
+        // Should report both the import line and the bare type usage.
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].line, 3);
+        assert_eq!(refs[1].line, 5);
+        assert_eq!(refs[1].text.as_deref(), Some("type alias Page = Model"));
     }
 
     #[test]

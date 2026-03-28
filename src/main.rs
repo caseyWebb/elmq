@@ -186,6 +186,40 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Rename {
+            file,
+            old_name,
+            new_name,
+            format,
+            dry_run,
+        } => {
+            let canonical = file
+                .canonicalize()
+                .with_context(|| format!("file not found: {}", file.display()))?;
+
+            let result = project::execute_rename(&canonical, &old_name, &new_name, dry_run)?;
+
+            match format {
+                Format::Compact => {
+                    let prefix = if dry_run { "(dry run) " } else { "" };
+                    println!("{prefix}renamed {} -> {}", result.old_name, result.new_name);
+                    for f in &result.updated_files {
+                        println!("{prefix}updated {f}");
+                    }
+                }
+                Format::Json => {
+                    let json = serde_json::json!({
+                        "dry_run": dry_run,
+                        "renamed": {
+                            "from": result.old_name,
+                            "to": result.new_name,
+                        },
+                        "updated": result.updated_files,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json)?);
+                }
+            }
+        }
         Command::Mcp => {
             tokio::runtime::Runtime::new()
                 .context("failed to create tokio runtime")?
