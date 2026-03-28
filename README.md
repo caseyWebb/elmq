@@ -194,6 +194,38 @@ src/Main.elm:7: Lib.Utils.helper model
 
 Resolves fully-qualified references (`Lib.Utils.helper`), aliased references (`LU.helper`), and explicitly-exposed names. Requires `elm.json` in a parent directory.
 
+### Rename a declaration
+
+```sh
+elmq rename src/Main.elm helper helperV2
+```
+
+```
+renamed helper -> helperV2
+updated src/Page/Home.elm
+```
+
+Renames a declaration (or type constructor) and updates all references across the project. Handles qualified, aliased, and bare-exposed references. Use `--dry-run` to preview changes.
+
+### Move declarations between modules
+
+```sh
+elmq move-decl src/Page/Home.elm --name viewHeader --name viewFooter --to src/Shared/Layout.elm
+```
+
+```
+moved viewHeader
+moved viewFooter
+auto-included renderNav
+updated src/Page/Home.elm
+updated src/Shared/Layout.elm
+updated src/Main.elm
+```
+
+Moves declarations from one module to another, rewriting the declaration bodies to match the target file's import conventions (aliases, exposed names). Automatically includes unexposed helpers used only by the moved declarations. Creates the target file if it doesn't exist. Auto-upgrades the target to a `port module` when moving ports.
+
+Use `--copy-shared-helpers` to duplicate (not move) helpers that are used by both moved and non-moved declarations. Use `--dry-run` to preview changes.
+
 ### JSON output
 
 ```sh
@@ -224,14 +256,13 @@ Start the MCP server (stdio transport):
 elmq mcp
 ```
 
-Exposes 5 tools optimized for LLM agents:
+Exposes 4 tools optimized for LLM agents:
 
 | Tool | Description |
 |------|-------------|
 | `elm_summary` | File overview: module, imports, declarations with types and line numbers |
 | `elm_get` | Extract full source text of a declaration by name |
-| `elm_edit` | Modify declarations: `set` (upsert), `patch` (find-replace), `rm` (remove), `mv` (rename module across project), `rename` (rename declaration across project) |
-| `elm_module` | Manage imports and exposing list: `add_import`, `remove_import`, `expose`, `unexpose` |
+| `elm_edit` | All file mutations: `set`, `patch`, `rm`, `mv`, `rename`, `move_decl`, `add_import`, `remove_import`, `expose`, `unexpose` |
 | `elm_refs` | Find all references to a module or declaration across the project |
 
 Configure in your MCP client (e.g. Claude Code `settings.json`):

@@ -220,6 +220,47 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::MoveDecl {
+            file,
+            names,
+            target,
+            copy_shared_helpers,
+            format,
+            dry_run,
+        } => {
+            let canonical = file
+                .canonicalize()
+                .with_context(|| format!("file not found: {}", file.display()))?;
+
+            let result = elmq::move_decl::execute_move_declaration(
+                &canonical,
+                &names,
+                &target,
+                copy_shared_helpers,
+                dry_run,
+            )?;
+
+            match format {
+                Format::Compact => {
+                    let prefix = if dry_run { "(dry run) " } else { "" };
+                    for name in &result.moved {
+                        println!("{prefix}moved {name}");
+                    }
+                    for name in &result.auto_included {
+                        println!("{prefix}auto-included {name}");
+                    }
+                    for name in &result.copied {
+                        println!("{prefix}copied {name}");
+                    }
+                    for f in &result.updated_files {
+                        println!("{prefix}updated {f}");
+                    }
+                }
+                Format::Json => {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+            }
+        }
         Command::Mcp => {
             tokio::runtime::Runtime::new()
                 .context("failed to create tokio runtime")?

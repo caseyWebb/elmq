@@ -1,3 +1,5 @@
+pub mod imports;
+pub mod move_decl;
 pub mod parser;
 pub mod project;
 pub mod refs;

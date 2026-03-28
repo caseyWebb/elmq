@@ -172,9 +172,8 @@ fn tools_list() {
     assert!(names.contains(&"elm_summary"));
     assert!(names.contains(&"elm_get"));
     assert!(names.contains(&"elm_edit"));
-    assert!(names.contains(&"elm_module"));
     assert!(names.contains(&"elm_refs"));
-    assert_eq!(names.len(), 5);
+    assert_eq!(names.len(), 4);
 
     drop(stdin);
     let _ = child.wait();
@@ -353,11 +352,11 @@ fn edit_missing_required_params() {
             "name": "update"
         }),
     );
-    assert!(is_error(&resp));
-    assert!(result_text(&resp).contains("\"old\" is required"));
+    // serde rejects missing required fields at the protocol level
+    assert!(resp.get("error").is_some() || is_error(&resp));
 }
 
-// -- elm_module tests --
+// -- elm_edit import/expose tests --
 
 #[test]
 fn module_add_import() {
@@ -370,7 +369,7 @@ fn module_add_import() {
     .unwrap();
 
     let resp = call_tool(
-        "elm_module",
+        "elm_edit",
         serde_json::json!({
             "file": file.to_str().unwrap(),
             "action": "add_import",
@@ -394,7 +393,7 @@ fn module_remove_import() {
     .unwrap();
 
     let resp = call_tool(
-        "elm_module",
+        "elm_edit",
         serde_json::json!({
             "file": file.to_str().unwrap(),
             "action": "remove_import",
@@ -419,7 +418,7 @@ fn module_expose() {
     .unwrap();
 
     let resp = call_tool(
-        "elm_module",
+        "elm_edit",
         serde_json::json!({
             "file": file.to_str().unwrap(),
             "action": "expose",
@@ -444,7 +443,7 @@ fn module_unexpose() {
     .unwrap();
 
     let resp = call_tool(
-        "elm_module",
+        "elm_edit",
         serde_json::json!({
             "file": file.to_str().unwrap(),
             "action": "unexpose",
@@ -460,7 +459,7 @@ fn module_unexpose() {
 #[test]
 fn module_invalid_action() {
     let resp = call_tool(
-        "elm_module",
+        "elm_edit",
         serde_json::json!({
             "file": "test-fixtures/Sample.elm",
             "action": "invalid"
@@ -632,8 +631,8 @@ fn edit_mv_missing_new_path() {
             "action": "mv"
         }),
     );
-    assert!(is_error(&resp));
-    assert!(result_text(&resp).contains("new_path"));
+    // serde rejects missing required fields at the protocol level
+    assert!(resp.get("error").is_some() || is_error(&resp));
 }
 
 // -- Path traversal tests --

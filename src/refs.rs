@@ -1,3 +1,4 @@
+use crate::imports::{ExposedItem, ImportContext};
 use crate::parser;
 use crate::project::Project;
 use anyhow::{Context, Result};
@@ -89,79 +90,52 @@ pub(crate) struct ImportInfo {
 }
 
 /// Parse import clauses to find if/how the target module is imported.
+/// Delegates to `ImportContext` for the heavy lifting.
 pub(crate) fn parse_imports(root: &Node, source: &str, target_module: &str) -> Option<ImportInfo> {
+    let ctx = ImportContext::from_tree(root, source);
+    let module_import = ctx.get(target_module)?;
+
+    // Find the import line number (ImportContext doesn't track this).
+    let import_line = find_import_line(root, source, target_module)?;
+
+    let mut exposed_names = Vec::new();
+    let mut exposed_constructors_of = Vec::new();
+    for item in &module_import.exposed {
+        match item {
+            ExposedItem::Value(n) | ExposedItem::Type(n) => {
+                exposed_names.push(n.clone());
+            }
+            ExposedItem::TypeWithConstructors(n) => {
+                exposed_names.push(n.clone());
+                exposed_constructors_of.push(n.clone());
+            }
+        }
+    }
+
+    Some(ImportInfo {
+        import_line,
+        module_name: module_import.module_name.clone(),
+        alias: module_import.alias.clone(),
+        exposed_names,
+        exposed_constructors_of,
+    })
+}
+
+/// Find the line number of the import clause for a target module.
+fn find_import_line(root: &Node, source: &str, target_module: &str) -> Option<usize> {
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
         if child.kind() != "import_clause" {
             continue;
         }
-
-        let Some(module_name_node) = child.child_by_field_name("moduleName") else {
-            continue;
-        };
-        let Ok(module_name) = module_name_node.utf8_text(source.as_bytes()) else {
-            continue;
-        };
-
-        if module_name != target_module {
-            continue;
+        if let Some(module_name_node) = child.child_by_field_name("moduleName")
+            && let Ok(module_name) = module_name_node.utf8_text(source.as_bytes())
+            && module_name == target_module
+        {
+            return Some(child.start_position().row + 1);
         }
-
-        let import_line = child.start_position().row + 1;
-
-        let alias = child
-            .child_by_field_name("asClause")
-            .and_then(|as_clause| as_clause.child_by_field_name("name"))
-            .and_then(|name_node| name_node.utf8_text(source.as_bytes()).ok())
-            .map(|s| s.to_string());
-
-        let (exposed_names, exposed_constructors_of) = child
-            .child_by_field_name("exposing")
-            .map(|exposing_list| extract_exposed_info(&exposing_list, source))
-            .unwrap_or_default();
-
-        return Some(ImportInfo {
-            import_line,
-            module_name: module_name.to_string(),
-            alias,
-            exposed_names,
-            exposed_constructors_of,
-        });
     }
-
     None
-}
-
-/// Extract exposed names and types-with-constructors from an exposing list.
-/// Returns (exposed_names, exposed_constructors_of) where exposed_constructors_of
-/// contains type names that are exposed with `(..)` (e.g., `Msg` from `Msg(..)`).
-fn extract_exposed_info(exposing_list: &Node, source: &str) -> (Vec<String>, Vec<String>) {
-    let mut names = Vec::new();
-    let mut constructors_of = Vec::new();
-    let mut cursor = exposing_list.walk();
-    for child in exposing_list.named_children(&mut cursor) {
-        match child.kind() {
-            "exposed_value" => {
-                if let Ok(text) = child.utf8_text(source.as_bytes()) {
-                    names.push(text.to_string());
-                }
-            }
-            "exposed_type" => {
-                if let Ok(text) = child.utf8_text(source.as_bytes()) {
-                    let name = text.split('(').next().unwrap_or(text).trim();
-                    if name != ".." {
-                        names.push(name.to_string());
-                        // Track if this type exposes its constructors.
-                        if text.contains("(..)") {
-                            constructors_of.push(name.to_string());
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    (names, constructors_of)
 }
 
 /// Collect all reference sites for a specific declaration in a file.

@@ -35,7 +35,7 @@ impl ServerHandler for ElmqServer {
             .with_instructions(
                 "Query and edit Elm files — like jq for Elm. \
                  Use elm_summary to see file structure, elm_get to read declarations, \
-                 elm_edit to modify declarations, elm_module to manage imports and exposing, \
+                 elm_edit to modify files (declarations, imports, exposing list, refactoring), \
                  and elm_refs to find references across the project.",
             )
             .with_server_info(rmcp::model::Implementation::new(
@@ -68,65 +68,85 @@ pub struct GetParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum EditAction {
-    /// Upsert a declaration from source text
-    Set,
-    /// Find-and-replace within a declaration
-    Patch,
-    /// Remove a declaration
-    Rm,
-    /// Rename/move a module file and update all imports and qualified references across the project
-    Mv,
-    /// Rename a declaration and update all references across the project
-    Rename,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct EditParams {
     /// Path to the Elm file
     pub file: String,
-    /// Action to perform
+    /// Action and its parameters
+    #[serde(flatten)]
     pub action: EditAction,
-    /// Full source text of the declaration (required for "set")
-    pub source: Option<String>,
-    /// Declaration name (optional for "set" where it's parsed from source; required for "patch" and "rm")
-    pub name: Option<String>,
-    /// Text to find within the declaration (required for "patch")
-    pub old: Option<String>,
-    /// Replacement text (required for "patch"); new name (required for "rename")
-    pub new: Option<String>,
-    /// New file path for the module (required for "mv")
-    pub new_path: Option<String>,
-    /// If true, preview changes without writing (optional for "mv")
-    pub dry_run: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ModuleAction {
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum EditAction {
+    /// Upsert a declaration from source text
+    Set {
+        /// Full source text of the declaration
+        source: String,
+        /// Override the declaration name (default: parsed from source)
+        name: Option<String>,
+    },
+    /// Find-and-replace within a declaration
+    Patch {
+        /// Name of the declaration to patch
+        name: String,
+        /// Text to find within the declaration
+        old: String,
+        /// Replacement text
+        new: String,
+    },
+    /// Remove a declaration
+    Rm {
+        /// Name of the declaration to remove
+        name: String,
+    },
+    /// Rename/move a module file and update all imports and qualified references across the project
+    Mv {
+        /// New file path for the module
+        new_path: String,
+        /// If true, preview changes without writing
+        dry_run: Option<bool>,
+    },
+    /// Rename a declaration and update all references across the project
+    Rename {
+        /// Current name of the declaration
+        name: String,
+        /// New name for the declaration
+        new: String,
+        /// If true, preview changes without writing
+        dry_run: Option<bool>,
+    },
+    /// Move declarations from one module to another, updating all references across the project
+    MoveDecl {
+        /// Names of declarations to move
+        names: Vec<String>,
+        /// Path to the target Elm file
+        target: String,
+        /// Copy shared helpers instead of erroring
+        copy_shared_helpers: Option<bool>,
+        /// If true, preview changes without writing
+        dry_run: Option<bool>,
+    },
     /// Add or replace an import clause
-    AddImport,
+    AddImport {
+        /// Import clause, e.g. "Html exposing (Html, div)"
+        import: String,
+    },
     /// Remove an import by module name
-    RemoveImport,
+    RemoveImport {
+        /// Module name to remove, e.g. "Html"
+        module_name: String,
+    },
     /// Add an item to the module's exposing list
-    Expose,
+    Expose {
+        /// Item to expose, e.g. "update" or "Msg(..)"
+        item: String,
+    },
     /// Remove an item from the module's exposing list
-    Unexpose,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ModuleParams {
-    /// Path to the Elm file
-    pub file: String,
-    /// Action to perform
-    pub action: ModuleAction,
-    /// Import clause, e.g. "Html exposing (Html, div)" (required for "add_import")
-    pub import: Option<String>,
-    /// Module name to remove, e.g. "Html" (required for "remove_import")
-    pub module_name: Option<String>,
-    /// Item to expose or unexpose, e.g. "update" or "Msg(..)" (required for "expose"/"unexpose")
-    pub item: Option<String>,
+    Unexpose {
+        /// Item to unexpose, e.g. "helper"
+        item: String,
+    },
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -340,62 +360,101 @@ impl ElmqServer {
 
     #[tool(
         name = "elm_edit",
-        description = "Modify an Elm file. Actions: \"set\" (upsert declaration from source text), \"patch\" (find-and-replace within a declaration), \"rm\" (remove a declaration), \"mv\" (rename/move a module, updating all imports and qualified references across the project), \"rename\" (rename a declaration and update all references across the project). File writes are atomic."
+        description = "Modify an Elm file. Actions: \"set\" (upsert declaration), \"patch\" (find-replace in declaration), \"rm\" (remove declaration), \"mv\" (rename module across project), \"rename\" (rename declaration across project), \"move_decl\" (move declarations to another module), \"add_import\" (add/replace import), \"remove_import\" (remove import), \"expose\" (add to exposing list), \"unexpose\" (remove from exposing list). All writes are atomic."
     )]
     fn elm_edit(&self, Parameters(params): Parameters<EditParams>) -> Result<String, String> {
-        let (source, summary) = load_and_parse(&params.file)?;
-        let path = validate_path(&params.file)?;
-
         match params.action {
-            EditAction::Set => {
-                let new_source = params
-                    .source
-                    .as_deref()
-                    .ok_or("\"source\" is required for action \"set\"")?;
+            EditAction::Set {
+                source: new_source,
+                name,
+            } => {
+                let (source, summary) = load_and_parse(&params.file)?;
+                let path = validate_path(&params.file)?;
 
-                let decl_name = if let Some(name) = &params.name {
+                let decl_name = if let Some(name) = &name {
                     name.clone()
                 } else {
-                    parser::extract_declaration_name(new_source)
+                    parser::extract_declaration_name(&new_source)
                         .ok_or("could not parse declaration name from source (provide \"name\")")?
                 };
 
-                let result = writer::upsert_declaration(&source, &summary, &decl_name, new_source);
+                let result = writer::upsert_declaration(&source, &summary, &decl_name, &new_source);
                 writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("set {decl_name} in {}", params.file))
             }
-            EditAction::Patch => {
-                let name = params
-                    .name
-                    .as_deref()
-                    .ok_or("\"name\" is required for action \"patch\"")?;
-                let old = params
-                    .old
-                    .as_deref()
-                    .ok_or("\"old\" is required for action \"patch\"")?;
-                let new = params
-                    .new
-                    .as_deref()
-                    .ok_or("\"new\" is required for action \"patch\"")?;
+            EditAction::Patch { name, old, new } => {
+                let (source, summary) = load_and_parse(&params.file)?;
+                let path = validate_path(&params.file)?;
 
-                let result = writer::patch_declaration(&source, &summary, name, old, new)
+                let result = writer::patch_declaration(&source, &summary, &name, &old, &new)
                     .map_err(|e| e.to_string())?;
                 writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("patched {name} in {}", params.file))
             }
-            EditAction::Rm => {
-                let name = params
-                    .name
-                    .as_deref()
-                    .ok_or("\"name\" is required for action \"rm\"")?;
+            EditAction::Rm { name } => {
+                let (source, summary) = load_and_parse(&params.file)?;
+                let path = validate_path(&params.file)?;
 
-                let result = writer::remove_declaration(&source, &summary, name)
+                let result = writer::remove_declaration(&source, &summary, &name)
                     .map_err(|e| e.to_string())?;
                 writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
                 Ok(format!("removed {name} from {}", params.file))
             }
-            EditAction::Mv => self.handle_mv(&params),
-            EditAction::Rename => self.handle_rename(&params),
+            EditAction::Mv {
+                ref new_path,
+                dry_run,
+            } => self.handle_mv(&params.file, new_path, dry_run.unwrap_or(false)),
+            EditAction::Rename {
+                ref name,
+                ref new,
+                dry_run,
+            } => self.handle_rename(&params.file, name, new, dry_run.unwrap_or(false)),
+            EditAction::MoveDecl {
+                ref names,
+                ref target,
+                copy_shared_helpers,
+                dry_run,
+            } => self.handle_move_decl(
+                &params.file,
+                names,
+                target,
+                copy_shared_helpers.unwrap_or(false),
+                dry_run.unwrap_or(false),
+            ),
+            EditAction::AddImport { import } => {
+                let (source, summary) = load_and_parse(&params.file)?;
+                let path = validate_path(&params.file)?;
+
+                let result = writer::add_import(&source, &summary, &import);
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+                Ok(format!("added import in {}", params.file))
+            }
+            EditAction::RemoveImport { module_name } => {
+                let (source, _summary) = load_and_parse(&params.file)?;
+                let path = validate_path(&params.file)?;
+
+                let result =
+                    writer::remove_import(&source, &module_name).map_err(|e| e.to_string())?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+                Ok(format!("removed import {module_name} from {}", params.file))
+            }
+            EditAction::Expose { item } => {
+                let (source, summary) = load_and_parse(&params.file)?;
+                let path = validate_path(&params.file)?;
+
+                let result = writer::expose(&source, &summary, &item).map_err(|e| e.to_string())?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+                Ok(format!("exposed {item} in {}", params.file))
+            }
+            EditAction::Unexpose { item } => {
+                let (source, summary) = load_and_parse(&params.file)?;
+                let path = validate_path(&params.file)?;
+
+                let result =
+                    writer::unexpose(&source, &summary, &item).map_err(|e| e.to_string())?;
+                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
+                Ok(format!("unexposed {item} in {}", params.file))
+            }
         }
     }
 
@@ -429,75 +488,17 @@ impl ElmqServer {
             Ok(lines.join("\n"))
         }
     }
-
-    #[tool(
-        name = "elm_module",
-        description = "Manage an Elm file's imports and exposing list. Actions: \"add_import\" (add or replace an import clause), \"remove_import\" (remove an import by module name), \"expose\" (add item to module exposing list), \"unexpose\" (remove item from module exposing list). File is written atomically."
-    )]
-    fn elm_module(&self, Parameters(params): Parameters<ModuleParams>) -> Result<String, String> {
-        let (source, summary) = load_and_parse(&params.file)?;
-        let path = validate_path(&params.file)?;
-
-        match params.action {
-            ModuleAction::AddImport => {
-                let import = params
-                    .import
-                    .as_deref()
-                    .ok_or("\"import\" is required for action \"add_import\"")?;
-
-                let result = writer::add_import(&source, &summary, import);
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("added import in {}", params.file))
-            }
-            ModuleAction::RemoveImport => {
-                let module_name = params
-                    .module_name
-                    .as_deref()
-                    .ok_or("\"module_name\" is required for action \"remove_import\"")?;
-
-                let result =
-                    writer::remove_import(&source, module_name).map_err(|e| e.to_string())?;
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("removed import {module_name} from {}", params.file))
-            }
-            ModuleAction::Expose => {
-                let item = params
-                    .item
-                    .as_deref()
-                    .ok_or("\"item\" is required for action \"expose\"")?;
-
-                let result = writer::expose(&source, &summary, item).map_err(|e| e.to_string())?;
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("exposed {item} in {}", params.file))
-            }
-            ModuleAction::Unexpose => {
-                let item = params
-                    .item
-                    .as_deref()
-                    .ok_or("\"item\" is required for action \"unexpose\"")?;
-
-                let result =
-                    writer::unexpose(&source, &summary, item).map_err(|e| e.to_string())?;
-                writer::atomic_write(&path, &result).map_err(|e| format!("write error: {e}"))?;
-                Ok(format!("unexposed {item} in {}", params.file))
-            }
-        }
-    }
 }
 
 impl ElmqServer {
-    fn handle_rename(&self, params: &EditParams) -> Result<String, String> {
-        let name = params
-            .name
-            .as_deref()
-            .ok_or("\"name\" is required for action \"rename\"")?;
-        let new_name = params
-            .new
-            .as_deref()
-            .ok_or("\"new\" is required for action \"rename\"")?;
-        let dry_run = params.dry_run.unwrap_or(false);
-
-        let path = validate_path(&params.file)?;
+    fn handle_rename(
+        &self,
+        file: &str,
+        name: &str,
+        new_name: &str,
+        dry_run: bool,
+    ) -> Result<String, String> {
+        let path = validate_path(file)?;
 
         let result = elmq::project::execute_rename(&path, name, new_name, dry_run)
             .map_err(|e| e.to_string())?;
@@ -513,14 +514,8 @@ impl ElmqServer {
         serde_json::to_string_pretty(&json).map_err(|e| format!("JSON error: {e}"))
     }
 
-    fn handle_mv(&self, params: &EditParams) -> Result<String, String> {
-        let new_path_str = params
-            .new_path
-            .as_deref()
-            .ok_or("\"new_path\" is required for action \"mv\"")?;
-        let dry_run = params.dry_run.unwrap_or(false);
-
-        let old_path = validate_path(&params.file)?;
+    fn handle_mv(&self, file: &str, new_path_str: &str, dry_run: bool) -> Result<String, String> {
+        let old_path = validate_path(file)?;
 
         // Resolve new path relative to CWD, then validate it's within CWD.
         let cwd = std::env::current_dir().map_err(|e| format!("could not determine cwd: {e}"))?;
@@ -561,6 +556,51 @@ impl ElmqServer {
             "updated": result.updated_files,
         });
         serde_json::to_string_pretty(&json).map_err(|e| format!("JSON error: {e}"))
+    }
+    fn handle_move_decl(
+        &self,
+        file: &str,
+        names: &[String],
+        target: &str,
+        copy_shared_helpers: bool,
+        dry_run: bool,
+    ) -> Result<String, String> {
+        let source_path = validate_path(file)?;
+
+        // Resolve target path relative to CWD.
+        let cwd = std::env::current_dir().map_err(|e| format!("could not determine cwd: {e}"))?;
+        let canonical_cwd = cwd.canonicalize().map_err(|e| format!("cwd error: {e}"))?;
+
+        let target_raw = Path::new(target);
+        let target_abs = if target_raw.is_absolute() {
+            target_raw.to_path_buf()
+        } else {
+            cwd.join(target_raw)
+        };
+
+        // Validate target is within CWD (check parent since file may not exist yet).
+        let target_parent = target_abs
+            .parent()
+            .ok_or_else(|| format!("invalid target path \"{target}\""))?;
+        let canonical_parent = target_parent
+            .canonicalize()
+            .map_err(|e| format!("invalid target path \"{target}\": {e}"))?;
+        if !canonical_parent.starts_with(&canonical_cwd) {
+            return Err(format!(
+                "target path \"{target}\" resolves outside the working directory"
+            ));
+        }
+
+        let result = elmq::move_decl::execute_move_declaration(
+            &source_path,
+            names,
+            &target_abs,
+            copy_shared_helpers,
+            dry_run,
+        )
+        .map_err(|e| e.to_string())?;
+
+        serde_json::to_string_pretty(&result).map_err(|e| format!("JSON error: {e}"))
     }
 }
 
