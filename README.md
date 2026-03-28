@@ -154,6 +154,32 @@ updated src/Page/Home.elm
 
 Renames the file, updates the module declaration, and rewrites all imports and qualified references (`Foo.Bar.something` -> `Foo.Baz.something`) across the project. Requires `elm.json` in a parent directory. Use `--dry-run` to preview changes without writing.
 
+### Find references
+
+```sh
+elmq refs src/Lib/Utils.elm
+```
+
+```
+src/Main.elm:3
+src/Page/Home.elm:5
+src/Page/Settings.elm:3
+```
+
+Find all files that import a module. Add a declaration name to find specific usage sites:
+
+```sh
+elmq refs src/Lib/Utils.elm helper
+```
+
+```
+src/Page/Home.elm:3: import Lib.Utils exposing (helper)
+src/Page/Settings.elm:5: LU.helper config
+src/Main.elm:7: Lib.Utils.helper model
+```
+
+Resolves fully-qualified references (`Lib.Utils.helper`), aliased references (`LU.helper`), and explicitly-exposed names. Requires `elm.json` in a parent directory.
+
 ### JSON output
 
 ```sh
@@ -184,7 +210,7 @@ Start the MCP server (stdio transport):
 elmq mcp
 ```
 
-Exposes 4 tools optimized for LLM agents:
+Exposes 5 tools optimized for LLM agents:
 
 | Tool | Description |
 |------|-------------|
@@ -192,6 +218,7 @@ Exposes 4 tools optimized for LLM agents:
 | `elm_get` | Extract full source text of a declaration by name |
 | `elm_edit` | Modify declarations: `set` (upsert), `patch` (find-replace), `rm` (remove), `mv` (rename module across project) |
 | `elm_module` | Manage imports and exposing list: `add_import`, `remove_import`, `expose`, `unexpose` |
+| `elm_refs` | Find all references to a module or declaration across the project |
 
 Configure in your MCP client (e.g. Claude Code `settings.json`):
 

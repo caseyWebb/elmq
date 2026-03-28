@@ -46,7 +46,7 @@ Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scri
 
 - Project-aware mode (elm.json, source-directories) ✓
 - `mv` — rename a module and update imports and qualified references across the project ✓
-- Cross-file queries (who exposes X, who imports Y)
+- `refs` — find all references to a module or declaration across the project ✓
 - Propagating edits (add type constructor → update case expressions at all use sites)
 
 ## Phase 5: Advanced

@@ -6,6 +6,7 @@ use clap::Parser;
 use cli::{Cli, Command, Format, ImportCommand};
 use elmq::parser;
 use elmq::project;
+use elmq::refs;
 use elmq::writer;
 use elmq::{Declaration, DeclarationKind, FileSummary};
 use std::io::Read;
@@ -157,6 +158,31 @@ fn main() -> Result<()> {
                         "updated": result.updated_files,
                     });
                     println!("{}", serde_json::to_string_pretty(&json)?);
+                }
+            }
+        }
+        Command::Refs { file, name, format } => {
+            let canonical = file
+                .canonicalize()
+                .with_context(|| format!("file not found: {}", file.display()))?;
+
+            let project = project::Project::discover(&canonical)?;
+            let target_module = project.module_name(&canonical)?;
+            let matches = refs::find_refs(&project, &target_module, name.as_deref())?;
+
+            match format {
+                Format::Compact => {
+                    for r in &matches {
+                        if let Some(text) = &r.text {
+                            println!("{}:{}: {}", r.file, r.line, text);
+                        } else {
+                            println!("{}:{}", r.file, r.line);
+                        }
+                    }
+                }
+                Format::Json => {
+                    let json = serde_json::to_string_pretty(&matches)?;
+                    println!("{json}");
                 }
             }
         }
