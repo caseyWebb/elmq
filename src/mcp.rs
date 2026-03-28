@@ -78,6 +78,8 @@ pub enum EditAction {
     Rm,
     /// Rename/move a module file and update all imports and qualified references across the project
     Mv,
+    /// Rename a declaration and update all references across the project
+    Rename,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -92,7 +94,7 @@ pub struct EditParams {
     pub name: Option<String>,
     /// Text to find within the declaration (required for "patch")
     pub old: Option<String>,
-    /// Replacement text (required for "patch")
+    /// Replacement text (required for "patch"); new name (required for "rename")
     pub new: Option<String>,
     /// New file path for the module (required for "mv")
     pub new_path: Option<String>,
@@ -338,7 +340,7 @@ impl ElmqServer {
 
     #[tool(
         name = "elm_edit",
-        description = "Modify an Elm file. Actions: \"set\" (upsert declaration from source text), \"patch\" (find-and-replace within a declaration), \"rm\" (remove a declaration), \"mv\" (rename/move a module, updating all imports and qualified references across the project). File writes are atomic."
+        description = "Modify an Elm file. Actions: \"set\" (upsert declaration from source text), \"patch\" (find-and-replace within a declaration), \"rm\" (remove a declaration), \"mv\" (rename/move a module, updating all imports and qualified references across the project), \"rename\" (rename a declaration and update all references across the project). File writes are atomic."
     )]
     fn elm_edit(&self, Parameters(params): Parameters<EditParams>) -> Result<String, String> {
         let (source, summary) = load_and_parse(&params.file)?;
@@ -393,6 +395,7 @@ impl ElmqServer {
                 Ok(format!("removed {name} from {}", params.file))
             }
             EditAction::Mv => self.handle_mv(&params),
+            EditAction::Rename => self.handle_rename(&params),
         }
     }
 
@@ -483,6 +486,33 @@ impl ElmqServer {
 }
 
 impl ElmqServer {
+    fn handle_rename(&self, params: &EditParams) -> Result<String, String> {
+        let name = params
+            .name
+            .as_deref()
+            .ok_or("\"name\" is required for action \"rename\"")?;
+        let new_name = params
+            .new
+            .as_deref()
+            .ok_or("\"new\" is required for action \"rename\"")?;
+        let dry_run = params.dry_run.unwrap_or(false);
+
+        let path = validate_path(&params.file)?;
+
+        let result = elmq::project::execute_rename(&path, name, new_name, dry_run)
+            .map_err(|e| e.to_string())?;
+
+        let json = serde_json::json!({
+            "dry_run": dry_run,
+            "renamed": {
+                "from": result.old_name,
+                "to": result.new_name,
+            },
+            "updated": result.updated_files,
+        });
+        serde_json::to_string_pretty(&json).map_err(|e| format!("JSON error: {e}"))
+    }
+
     fn handle_mv(&self, params: &EditParams) -> Result<String, String> {
         let new_path_str = params
             .new_path

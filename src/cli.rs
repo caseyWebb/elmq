@@ -117,6 +117,25 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Compact)]
         format: Format,
     },
+    /// Rename a declaration and update all references across the project
+    Rename {
+        /// Path to the Elm file containing the declaration
+        file: PathBuf,
+
+        /// Current name of the declaration or variant
+        old_name: String,
+
+        /// New name for the declaration or variant
+        new_name: String,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Compact)]
+        format: Format,
+
+        /// Preview changes without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Start MCP server (stdio transport)
     Mcp,
 }

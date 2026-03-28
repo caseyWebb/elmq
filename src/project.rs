@@ -261,6 +261,282 @@ pub fn execute_mv(old_path: &Path, resolved_new: &Path, dry_run: bool) -> Result
     })
 }
 
+/// Result of a `rename` operation.
+#[derive(Debug)]
+pub struct RenameResult {
+    /// The old declaration name.
+    pub old_name: String,
+    /// The new declaration name.
+    pub new_name: String,
+    /// Display paths of files that were updated (relative to project root).
+    pub updated_files: Vec<String>,
+}
+
+/// Execute a project-wide declaration rename.
+///
+/// Renames the declaration in the defining file, and if the declaration is exposed,
+/// updates all references across the project.
+pub fn execute_rename(
+    file: &Path,
+    old_name: &str,
+    new_name: &str,
+    dry_run: bool,
+) -> Result<RenameResult> {
+    if !file.is_file() {
+        bail!("not a file: {}", file.display());
+    }
+
+    let source = std::fs::read_to_string(file)
+        .with_context(|| format!("could not read {}", file.display()))?;
+
+    let tree = crate::parser::parse(&source)
+        .with_context(|| format!("parse error in {}", file.display()))?;
+    let summary = crate::parser::extract_summary(&tree, &source);
+
+    // Check that old_name exists as a declaration or variant.
+    let is_declaration = summary.find_declaration(old_name).is_some();
+    let is_variant = !is_declaration && find_variant_in_source(&tree, &source, old_name);
+
+    if !is_declaration && !is_variant {
+        bail!(
+            "declaration or variant '{}' not found in {}",
+            old_name,
+            file.display()
+        );
+    }
+
+    // Check for name conflicts.
+    if summary.find_declaration(new_name).is_some() {
+        bail!(
+            "'{}' already exists as a declaration in {}",
+            new_name,
+            file.display()
+        );
+    }
+    if find_variant_in_source(&tree, &source, new_name) {
+        bail!(
+            "'{}' already exists as a variant in {}",
+            new_name,
+            file.display()
+        );
+    }
+
+    // Rename in the defining file.
+    let new_source = writer::rename_declaration_in_file(&source, old_name, new_name)?;
+    let mut updated_files: Vec<String> = Vec::new();
+
+    // Determine if the declaration is exposed from the module.
+    // For variants, check if the parent type is exposed with (..).
+    let variant_parent_type = if is_variant {
+        find_variant_parent_type(&tree, &source, old_name)
+    } else {
+        None
+    };
+    let is_exposed = if is_variant {
+        // A variant is exposed if its parent type is exposed with (..).
+        variant_parent_type
+            .as_deref()
+            .is_some_and(|parent| is_type_exposed_with_constructors(&tree, &source, parent))
+    } else {
+        is_declaration_exposed(&tree, &source, old_name)
+    };
+
+    // If exposed, scan all project files for references to update.
+    if is_exposed {
+        let project = Project::discover(file)?;
+        let target_module = project.module_name(file)?;
+        let elm_files = project.elm_files()?;
+        let file_canonical = file
+            .canonicalize()
+            .with_context(|| format!("could not canonicalize {}", file.display()))?;
+
+        for elm_file in &elm_files {
+            let Ok(elm_canonical) = elm_file.canonicalize() else {
+                continue;
+            };
+            if elm_canonical == file_canonical {
+                continue;
+            }
+
+            let file_source = std::fs::read_to_string(elm_file)
+                .with_context(|| format!("could not read {}", elm_file.display()))?;
+
+            let file_tree = match crate::parser::parse(&file_source) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            let root = file_tree.root_node();
+            let import_info = crate::refs::parse_imports(&root, &file_source, &target_module);
+
+            let Some(import_info) = import_info else {
+                continue;
+            };
+
+            // Skip files using exposing(..)
+            if has_exposing_all(&file_tree, &file_source, &target_module) {
+                continue;
+            }
+
+            let updated = writer::rename_references_in_file(
+                &file_source,
+                old_name,
+                new_name,
+                &import_info,
+                variant_parent_type.as_deref(),
+            );
+
+            if updated != file_source {
+                if !dry_run {
+                    writer::atomic_write(elm_file, &updated)?;
+                }
+                updated_files.push(display_path(
+                    elm_file.strip_prefix(&project.root).unwrap_or(elm_file),
+                ));
+            }
+        }
+    }
+
+    // Write the defining file last.
+    if new_source != source && !dry_run {
+        writer::atomic_write(file, &new_source)?;
+    }
+
+    Ok(RenameResult {
+        old_name: old_name.to_string(),
+        new_name: new_name.to_string(),
+        updated_files,
+    })
+}
+
+/// Check if a variant name exists in any type declaration.
+fn find_variant_in_source(tree: &tree_sitter::Tree, source: &str, name: &str) -> bool {
+    find_variant_parent_type(tree, source, name).is_some()
+}
+
+/// Find the parent type name of a variant. Returns None if the variant doesn't exist.
+fn find_variant_parent_type(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    variant_name: &str,
+) -> Option<String> {
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        if child.kind() != "type_declaration" {
+            continue;
+        }
+        // Check if any union_variant in this type has the given name.
+        let mut inner = child.walk();
+        for descendant in child.named_children(&mut inner) {
+            if descendant.kind() == "union_variant"
+                && let Some(first) = descendant.named_child(0)
+                && let Ok(text) = first.utf8_text(source.as_bytes())
+                && text == variant_name
+            {
+                // Return the type's name.
+                if let Some(name_node) = child.child_by_field_name("name")
+                    && let Ok(type_name) = name_node.utf8_text(source.as_bytes())
+                {
+                    return Some(type_name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check if a declaration name appears in the module's exposing list.
+/// Uses tree-sitter AST to handle multiline module declarations correctly.
+fn is_declaration_exposed(tree: &tree_sitter::Tree, source: &str, name: &str) -> bool {
+    let root = tree.root_node();
+    let Some(module_decl) = root.child_by_field_name("moduleDeclaration") else {
+        return false;
+    };
+    let Some(exposing_list) = module_decl.child_by_field_name("exposing") else {
+        return false;
+    };
+    let mut cursor = exposing_list.walk();
+    for child in exposing_list.named_children(&mut cursor) {
+        match child.kind() {
+            "double_dot" => return true,
+            "exposed_value" => {
+                if let Ok(text) = child.utf8_text(source.as_bytes())
+                    && text == name
+                {
+                    return true;
+                }
+            }
+            "exposed_type" => {
+                if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                    let base = text.split('(').next().unwrap_or(text).trim();
+                    if base == name {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Check if a type is exposed with (..) in the module's exposing list.
+/// e.g., `module Foo exposing (Msg(..))` → `is_type_exposed_with_constructors(tree, source, "Msg")` is true.
+fn is_type_exposed_with_constructors(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    type_name: &str,
+) -> bool {
+    let root = tree.root_node();
+    let Some(module_decl) = root.child_by_field_name("moduleDeclaration") else {
+        return false;
+    };
+    let Some(exposing_list) = module_decl.child_by_field_name("exposing") else {
+        return false;
+    };
+    let mut cursor = exposing_list.walk();
+    for child in exposing_list.named_children(&mut cursor) {
+        if child.kind() == "double_dot" {
+            // exposing(..) exposes everything including all constructors.
+            return true;
+        }
+        if child.kind() == "exposed_type"
+            && let Ok(text) = child.utf8_text(source.as_bytes())
+        {
+            let base = text.split('(').next().unwrap_or(text).trim();
+            if base == type_name && text.contains("(..)") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if a file uses `exposing (..)` for a specific module import.
+fn has_exposing_all(tree: &tree_sitter::Tree, source: &str, target_module: &str) -> bool {
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        if child.kind() != "import_clause" {
+            continue;
+        }
+        if let Some(module_name_node) = child.child_by_field_name("moduleName")
+            && let Ok(module_name) = module_name_node.utf8_text(source.as_bytes())
+            && module_name == target_module
+            && let Some(exposing) = child.child_by_field_name("exposing")
+        {
+            let mut ecursor = exposing.walk();
+            for ec in exposing.named_children(&mut ecursor) {
+                if ec.kind() == "double_dot" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Format a path for display, always using forward slashes for cross-platform consistency.
 fn display_path(path: &Path) -> String {
     path.components()

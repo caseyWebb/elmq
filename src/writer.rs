@@ -534,6 +534,375 @@ pub fn rename_module_declaration(source: &str, new_name: &str) -> Result<String>
     Ok(result)
 }
 
+/// Rename a declaration in its defining file.
+/// Updates the definition name, type annotation name, all local references,
+/// and the module exposing list.
+pub fn rename_declaration_in_file(source: &str, old_name: &str, new_name: &str) -> Result<String> {
+    let tree = parser::parse(source)?;
+    let root = tree.root_node();
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+
+    // Collect all identifier nodes matching old_name (skipping strings/comments via AST).
+    collect_local_rename_replacements(&root, source, old_name, new_name, &mut replacements);
+
+    // Also update the module exposing list.
+    collect_module_exposing_replacements(&root, source, old_name, new_name, &mut replacements);
+
+    if replacements.is_empty() {
+        return Ok(source.to_string());
+    }
+
+    // Sort by start byte descending so we can apply back-to-front.
+    replacements.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut result = source.to_string();
+    for (start, end, replacement) in &replacements {
+        result.replace_range(*start..*end, replacement);
+    }
+    Ok(result)
+}
+
+/// Rename references to a declaration in an importing file.
+/// Uses ImportInfo to determine which references to rename (qualified, aliased, bare exposed).
+/// Also updates the import exposing list if the name is explicitly exposed.
+/// `variant_of_type` is the parent type name when renaming a variant — used to detect
+/// bare variant references from `import Foo exposing (Type(..))`.
+pub(crate) fn rename_references_in_file(
+    source: &str,
+    old_name: &str,
+    new_name: &str,
+    import_info: &crate::refs::ImportInfo,
+    variant_of_type: Option<&str>,
+) -> String {
+    let tree = match parser::parse(source) {
+        Ok(t) => t,
+        Err(_) => return source.to_string(),
+    };
+
+    let root = tree.root_node();
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+
+    collect_import_rename_replacements(
+        &root,
+        source,
+        old_name,
+        new_name,
+        import_info,
+        variant_of_type,
+        &mut replacements,
+    );
+
+    if replacements.is_empty() {
+        return source.to_string();
+    }
+
+    replacements.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut result = source.to_string();
+    for (start, end, replacement) in &replacements {
+        result.replace_range(*start..*end, replacement);
+    }
+    result
+}
+
+fn collect_local_rename_replacements(
+    node: &Node,
+    source: &str,
+    old_name: &str,
+    new_name: &str,
+    replacements: &mut Vec<(usize, usize, String)>,
+) {
+    match node.kind() {
+        // Function/value names in definitions and annotations.
+        "type_annotation" => {
+            // Rename the name field.
+            if let Some(name_node) = node.child_by_field_name("name")
+                && let Ok(text) = name_node.utf8_text(source.as_bytes())
+                && text == old_name
+            {
+                replacements.push((
+                    name_node.start_byte(),
+                    name_node.end_byte(),
+                    new_name.to_string(),
+                ));
+            }
+            // Also walk the type expression for type references.
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() != "lower_case_identifier" {
+                    collect_local_rename_replacements(
+                        &child,
+                        source,
+                        old_name,
+                        new_name,
+                        replacements,
+                    );
+                }
+            }
+            return;
+        }
+        "value_declaration" => {
+            // Rename the function name in function_declaration_left.
+            if let Some(fdl) = node.child_by_field_name("functionDeclarationLeft") {
+                let mut cursor = fdl.walk();
+                for child in fdl.named_children(&mut cursor) {
+                    if child.kind() == "lower_case_identifier" {
+                        if let Ok(text) = child.utf8_text(source.as_bytes())
+                            && text == old_name
+                        {
+                            replacements.push((
+                                child.start_byte(),
+                                child.end_byte(),
+                                new_name.to_string(),
+                            ));
+                        }
+                        break; // Only the first identifier is the function name.
+                    }
+                }
+            }
+            // Walk the body for references.
+            if let Some(body) = node.child_by_field_name("body") {
+                collect_local_rename_replacements(&body, source, old_name, new_name, replacements);
+            }
+            return;
+        }
+        "type_declaration" | "type_alias_declaration" => {
+            // Rename the type/alias name.
+            let name_node = node.child_by_field_name("name");
+            if let Some(ref nn) = name_node
+                && let Ok(text) = nn.utf8_text(source.as_bytes())
+                && text == old_name
+            {
+                replacements.push((nn.start_byte(), nn.end_byte(), new_name.to_string()));
+            }
+            // Walk children for variant constructors and type references,
+            // but skip the name node (already handled above).
+            let name_id = name_node.map(|n| n.id());
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if Some(child.id()) == name_id {
+                    continue;
+                }
+                collect_local_rename_replacements(&child, source, old_name, new_name, replacements);
+            }
+            return;
+        }
+        "port_annotation" => {
+            // Rename the port name.
+            if let Some(name_node) = node.child_by_field_name("name")
+                && let Ok(text) = name_node.utf8_text(source.as_bytes())
+                && text == old_name
+            {
+                replacements.push((
+                    name_node.start_byte(),
+                    name_node.end_byte(),
+                    new_name.to_string(),
+                ));
+            }
+            return;
+        }
+        // Bare value references.
+        "value_qid" => {
+            if let Ok(text) = node.utf8_text(source.as_bytes())
+                && text == old_name
+            {
+                replacements.push((node.start_byte(), node.end_byte(), new_name.to_string()));
+            }
+            return;
+        }
+        // Bare type/variant references.
+        "upper_case_qid" => {
+            if let Ok(text) = node.utf8_text(source.as_bytes())
+                && text == old_name
+            {
+                replacements.push((node.start_byte(), node.end_byte(), new_name.to_string()));
+            }
+            return;
+        }
+        // Bare upper-case identifier (variant constructors in type definitions).
+        "upper_case_identifier" => {
+            if let Ok(text) = node.utf8_text(source.as_bytes())
+                && text == old_name
+            {
+                replacements.push((node.start_byte(), node.end_byte(), new_name.to_string()));
+            }
+            return;
+        }
+        // Constructor pattern in case expressions.
+        "union_pattern" => {
+            // First child is the constructor name.
+            if let Some(first) = node.named_child(0)
+                && let Ok(text) = first.utf8_text(source.as_bytes())
+                && text == old_name
+            {
+                replacements.push((first.start_byte(), first.end_byte(), new_name.to_string()));
+            }
+            // Walk remaining children for nested patterns.
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor).skip(1) {
+                collect_local_rename_replacements(&child, source, old_name, new_name, replacements);
+            }
+            return;
+        }
+        // Skip module declaration and imports — handled separately.
+        "module_declaration" | "import_clause" => return,
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_local_rename_replacements(&child, source, old_name, new_name, replacements);
+    }
+}
+
+fn collect_module_exposing_replacements(
+    root: &Node,
+    source: &str,
+    old_name: &str,
+    new_name: &str,
+    replacements: &mut Vec<(usize, usize, String)>,
+) {
+    let Some(module_decl) = root.child_by_field_name("moduleDeclaration") else {
+        return;
+    };
+    let Some(exposing_list) = module_decl.child_by_field_name("exposing") else {
+        return;
+    };
+    let mut cursor = exposing_list.walk();
+    for child in exposing_list.named_children(&mut cursor) {
+        match child.kind() {
+            "exposed_value" => {
+                if let Ok(text) = child.utf8_text(source.as_bytes())
+                    && text == old_name
+                {
+                    replacements.push((child.start_byte(), child.end_byte(), new_name.to_string()));
+                }
+            }
+            "exposed_type" => {
+                // Could be "Model" or "Msg(..)".
+                if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                    let base = text.split('(').next().unwrap_or(text).trim();
+                    if base == old_name {
+                        // Replace just the name part, keeping the (..) suffix.
+                        let suffix = &text[base.len()..];
+                        replacements.push((
+                            child.start_byte(),
+                            child.end_byte(),
+                            format!("{new_name}{suffix}"),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_import_rename_replacements(
+    node: &Node,
+    source: &str,
+    old_name: &str,
+    new_name: &str,
+    import_info: &crate::refs::ImportInfo,
+    variant_of_type: Option<&str>,
+    replacements: &mut Vec<(usize, usize, String)>,
+) {
+    // A name is "exposed" if it's directly in the exposing list,
+    // OR if it's a variant whose parent type is imported with (..).
+    let is_exposed = import_info.exposed_names.iter().any(|n| n == old_name)
+        || variant_of_type.is_some_and(|parent| {
+            import_info
+                .exposed_constructors_of
+                .iter()
+                .any(|t| t == parent)
+        });
+
+    match node.kind() {
+        "import_clause" => {
+            // Check if this is the import for our target module.
+            if let Some(module_name_node) = node.child_by_field_name("moduleName")
+                && let Ok(module_name) = module_name_node.utf8_text(source.as_bytes())
+                && module_name == import_info.module_name
+            {
+                // Update the exposing list if the name is exposed.
+                if let Some(exposing_list) = node.child_by_field_name("exposing") {
+                    let mut cursor = exposing_list.walk();
+                    for child in exposing_list.named_children(&mut cursor) {
+                        match child.kind() {
+                            "exposed_value" => {
+                                if let Ok(text) = child.utf8_text(source.as_bytes())
+                                    && text == old_name
+                                {
+                                    replacements.push((
+                                        child.start_byte(),
+                                        child.end_byte(),
+                                        new_name.to_string(),
+                                    ));
+                                }
+                            }
+                            "exposed_type" => {
+                                if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                                    let base = text.split('(').next().unwrap_or(text).trim();
+                                    if base == old_name {
+                                        let suffix = &text[base.len()..];
+                                        replacements.push((
+                                            child.start_byte(),
+                                            child.end_byte(),
+                                            format!("{new_name}{suffix}"),
+                                        ));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        "value_qid" | "upper_case_qid" => {
+            if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                let full_prefix = format!("{}.", import_info.module_name);
+                let alias_prefix = import_info.alias.as_ref().map(|a| format!("{a}."));
+
+                if let Some(suffix) = text.strip_prefix(&full_prefix)
+                    && suffix == old_name
+                {
+                    // Qualified reference: Module.Name.old -> Module.Name.new
+                    let new_text = format!("{}{new_name}", full_prefix);
+                    replacements.push((node.start_byte(), node.end_byte(), new_text));
+                } else if let Some(ref alias_pfx) = alias_prefix
+                    && let Some(suffix) = text.strip_prefix(alias_pfx.as_str())
+                    && suffix == old_name
+                {
+                    // Aliased reference: Alias.old -> Alias.new
+                    let new_text = format!("{}{new_name}", alias_pfx);
+                    replacements.push((node.start_byte(), node.end_byte(), new_text));
+                } else if is_exposed && text == old_name {
+                    // Bare exposed reference.
+                    replacements.push((node.start_byte(), node.end_byte(), new_name.to_string()));
+                }
+            }
+            return;
+        }
+        "module_declaration" => return,
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_import_rename_replacements(
+            &child,
+            source,
+            old_name,
+            new_name,
+            import_info,
+            variant_of_type,
+            replacements,
+        );
+    }
+}
+
 fn collapse_blank_lines(source: &str) -> Result<String> {
     let mut result = String::new();
     let mut blank_count = 0;
@@ -641,5 +1010,170 @@ mod tests {
         let result = rename_module_references(source, "Foo.Bar", "Foo.Baz");
         assert!(result.contains("Foo.Barista"));
         assert!(!result.contains("Foo.Baz"));
+    }
+
+    // -- rename_declaration_in_file tests --
+
+    #[test]
+    fn test_rename_function_with_annotation() {
+        let source = "module Foo exposing (helper)\n\nhelper : String -> String\nhelper name =\n    name\n\nview = helper \"x\"\n";
+        let result = rename_declaration_in_file(source, "helper", "formatName").unwrap();
+        assert!(result.contains("formatName : String -> String"));
+        assert!(result.contains("formatName name ="));
+        assert!(result.contains("view = formatName \"x\""));
+        assert!(result.contains("exposing (formatName)"));
+        assert!(!result.contains("helper"));
+    }
+
+    #[test]
+    fn test_rename_function_without_annotation() {
+        let source = "module Foo exposing (helper)\n\nhelper name = name\n\nview = helper\n";
+        let result = rename_declaration_in_file(source, "helper", "formatName").unwrap();
+        assert!(result.contains("formatName name = name"));
+        assert!(result.contains("view = formatName"));
+        assert!(result.contains("exposing (formatName)"));
+    }
+
+    #[test]
+    fn test_rename_type() {
+        let source = "module Foo exposing (Msg(..))\n\ntype Msg = Click | Hover\n\nupdate : Msg -> Msg\nupdate msg = msg\n";
+        let result = rename_declaration_in_file(source, "Msg", "Action").unwrap();
+        assert!(result.contains("type Action = Click | Hover"));
+        assert!(result.contains("update : Action -> Action"));
+        assert!(result.contains("exposing (Action(..))"));
+        assert!(!result.contains("Msg"));
+    }
+
+    #[test]
+    fn test_rename_type_alias() {
+        let source = "module Foo exposing (Model)\n\ntype alias Model = { name : String }\n\ninit : Model\ninit = { name = \"\" }\n";
+        let result = rename_declaration_in_file(source, "Model", "AppModel").unwrap();
+        assert!(result.contains("type alias AppModel"));
+        assert!(result.contains("init : AppModel"));
+        assert!(result.contains("exposing (AppModel)"));
+    }
+
+    #[test]
+    fn test_rename_port() {
+        let source =
+            "port module Foo exposing (sendMessage)\n\nport sendMessage : String -> Cmd msg\n";
+        let result = rename_declaration_in_file(source, "sendMessage", "sendMsg").unwrap();
+        assert!(result.contains("port sendMsg : String -> Cmd msg"));
+        assert!(result.contains("exposing (sendMsg)"));
+    }
+
+    #[test]
+    fn test_rename_variant() {
+        let source = "module Foo exposing (Msg(..))\n\ntype Msg = GotResponse String | Other\n\nupdate msg =\n    case msg of\n        GotResponse s -> s\n        Other -> \"\"\n";
+        let result = rename_declaration_in_file(source, "GotResponse", "ReceivedResponse").unwrap();
+        assert!(result.contains("type Msg = ReceivedResponse String | Other"));
+        assert!(result.contains("ReceivedResponse s -> s"));
+        assert!(!result.contains("GotResponse"));
+    }
+
+    #[test]
+    fn test_rename_does_not_touch_strings_or_comments() {
+        let source = "module Foo exposing (..)\n\n-- helper is useful\nhelper = \"helper\"\n";
+        let result = rename_declaration_in_file(source, "helper", "formatName").unwrap();
+        assert!(result.contains("-- helper is useful"));
+        assert!(result.contains("\"helper\""));
+        assert!(result.contains("formatName ="));
+    }
+
+    #[test]
+    fn test_rename_unexposed_function() {
+        let source = "module Foo exposing (view)\n\nhelper = 1\n\nview = helper\n";
+        let result = rename_declaration_in_file(source, "helper", "formatName").unwrap();
+        assert!(result.contains("formatName = 1"));
+        assert!(result.contains("view = formatName"));
+        // exposing list should NOT change.
+        assert!(result.contains("exposing (view)"));
+    }
+
+    // -- rename_references_in_file tests --
+
+    #[test]
+    fn test_rename_ref_qualified() {
+        let source = "module Main exposing (..)\n\nimport Lib.Utils\n\nmain = Lib.Utils.helper\n";
+        let info = crate::refs::ImportInfo {
+            import_line: 3,
+            module_name: "Lib.Utils".to_string(),
+            alias: None,
+            exposed_names: vec![],
+            exposed_constructors_of: vec![],
+        };
+        let result = rename_references_in_file(source, "helper", "formatName", &info, None);
+        assert!(result.contains("Lib.Utils.formatName"));
+        assert!(!result.contains("Lib.Utils.helper"));
+    }
+
+    #[test]
+    fn test_rename_ref_aliased() {
+        let source = "module Main exposing (..)\n\nimport Lib.Utils as LU\n\nmain = LU.helper\n";
+        let info = crate::refs::ImportInfo {
+            import_line: 3,
+            module_name: "Lib.Utils".to_string(),
+            alias: Some("LU".to_string()),
+            exposed_names: vec![],
+            exposed_constructors_of: vec![],
+        };
+        let result = rename_references_in_file(source, "helper", "formatName", &info, None);
+        assert!(result.contains("LU.formatName"));
+        assert!(!result.contains("LU.helper"));
+    }
+
+    #[test]
+    fn test_rename_ref_exposed_bare() {
+        let source = "module Main exposing (..)\n\nimport Lib.Utils exposing (helper)\n\nmain = helper\n\nview = helper\n";
+        let info = crate::refs::ImportInfo {
+            import_line: 3,
+            module_name: "Lib.Utils".to_string(),
+            alias: None,
+            exposed_names: vec!["helper".to_string()],
+            exposed_constructors_of: vec![],
+        };
+        let result = rename_references_in_file(source, "helper", "formatName", &info, None);
+        assert!(result.contains("exposing (formatName)"));
+        assert!(result.contains("main = formatName"));
+        assert!(result.contains("view = formatName"));
+        assert!(!result.contains("helper"));
+    }
+
+    #[test]
+    fn test_rename_ref_exposed_type() {
+        let source = "module Main exposing (..)\n\nimport Lib.Types exposing (Model)\n\ntype alias Page = Model\n";
+        let info = crate::refs::ImportInfo {
+            import_line: 3,
+            module_name: "Lib.Types".to_string(),
+            alias: None,
+            exposed_names: vec!["Model".to_string()],
+            exposed_constructors_of: vec![],
+        };
+        let result = rename_references_in_file(source, "Model", "AppModel", &info, None);
+        assert!(result.contains("exposing (AppModel)"));
+        assert!(result.contains("type alias Page = AppModel"));
+    }
+
+    #[test]
+    fn test_rename_ref_variant_via_type_constructors() {
+        let source = "module Main exposing (..)\n\nimport Lib.Types exposing (Msg(..))\n\nupdate msg =\n    case msg of\n        GotResponse s -> s\n        Other -> \"\"\n";
+        let info = crate::refs::ImportInfo {
+            import_line: 3,
+            module_name: "Lib.Types".to_string(),
+            alias: None,
+            exposed_names: vec!["Msg".to_string()],
+            exposed_constructors_of: vec!["Msg".to_string()],
+        };
+        let result = rename_references_in_file(
+            source,
+            "GotResponse",
+            "ReceivedResponse",
+            &info,
+            Some("Msg"),
+        );
+        assert!(result.contains("ReceivedResponse s -> s"));
+        assert!(!result.contains("GotResponse"));
+        // Msg(..) should remain unchanged — we're renaming the variant, not the type.
+        assert!(result.contains("exposing (Msg(..))"));
     }
 }

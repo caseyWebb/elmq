@@ -122,10 +122,10 @@ fn refs_qualified_declaration() {
     assert!(output.status.success(), "stderr: {stderr}");
 
     let lines: Vec<&str> = stdout.trim().lines().collect();
-    // Page/Home: import line (exposed)
+    // Page/Home: import line (exposed) + bare usage
     // Page/Settings: LU.helper (alias qualified)
     // Main: Lib.Utils.helper (fully qualified)
-    assert_eq!(lines.len(), 3, "got: {stdout}");
+    assert_eq!(lines.len(), 4, "got: {stdout}");
     assert!(
         lines
             .iter()
@@ -139,6 +139,11 @@ fn refs_qualified_declaration() {
     assert!(lines.iter().any(
         |l| l.contains("src/Page/Home.elm") && l.contains("import Lib.Utils exposing (helper)")
     ));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("src/Page/Home.elm") && l.contains("view = helper"))
+    );
 }
 
 #[test]
@@ -226,7 +231,7 @@ fn refs_declaration_json_output() {
 
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     let arr = parsed.as_array().expect("array");
-    assert_eq!(arr.len(), 3);
+    assert_eq!(arr.len(), 4);
     for item in arr {
         assert!(item.get("file").is_some());
         assert!(item.get("line").is_some());
