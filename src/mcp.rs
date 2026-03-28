@@ -117,10 +117,14 @@ fn fix_schema(schema: &mut schemars::Schema) {
                     );
                 }
 
-                // Set required to just file + action
+                // Set required and type
                 obj.insert(
                     "required".to_owned(),
                     serde_json::json!(["file", "action"]),
+                );
+                obj.insert(
+                    "type".to_owned(),
+                    serde_json::json!("object"),
                 );
             }
         }
