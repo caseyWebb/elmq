@@ -20,14 +20,11 @@ fi
 
 # Check if elmq is available
 if ! command -v elmq &>/dev/null; then
-    # Use JSON output to avoid stdout mixing with MCP server init
     jq -n '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: "WARNING: This is an Elm project but elmq is not on PATH. Install elmq for structured Elm file operations: https://github.com/caseyWebb/elmq"}}' 2>/dev/null || echo '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"WARNING: This is an Elm project but elmq is not on PATH."}}'
     exit 0
 fi
 
-GUIDANCE='IMPORTANT: This is an Elm project with elmq MCP tools available. Before doing ANY work on .elm files, you MUST first load the elmq tools by calling: ToolSearch("select:elm_summary,elm_get,elm_edit,elm_refs"). Do this at the very start — the tools are deferred and won'"'"'t appear in your tool list until you search for them.
-
-Once loaded, you MUST use the elmq tools instead of built-in tools for .elm files. Do NOT use Read, Write, Edit, or Grep on .elm files — use the elmq equivalents below.
+GUIDANCE='IMPORTANT: This is an Elm project. You MUST use the elmq MCP tools instead of built-in tools when working with .elm files. Do NOT use Read, Write, Edit, or Grep on .elm files — use the elmq equivalents below.
 
 RULES:
 1. To understand a file'"'"'s structure: use elm_summary (NOT Read). Returns module line, imports, all declarations with types and line numbers in ~10% of the tokens.
@@ -39,8 +36,6 @@ The ONLY acceptable uses of built-in tools on .elm files:
 - Write: creating a brand-new .elm file that doesn'"'"'t exist yet
 - Bash: running elm make, elm-format, elm-test, elm-review, or other CLI tools'
 
-# Output as structured JSON to avoid stdout mixing with MCP server init
 jq -n --arg ctx "$GUIDANCE" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}' 2>/dev/null || {
-    # Fallback if jq not available — use node
     node -e "console.log(JSON.stringify({hookSpecificOutput:{hookEventName:'SessionStart',additionalContext:process.argv[1]}}))" "$GUIDANCE"
 }
