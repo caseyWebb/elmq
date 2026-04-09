@@ -41,7 +41,7 @@ Rust toolchain is pinned in `rust-toolchain.toml` (rustup installs it automatica
 The library (`lib.rs` + `parser.rs` + `imports.rs` + `writer.rs` + `project.rs` + `refs.rs` + `move_decl.rs` + `variant.rs`) is fully testable without the CLI binary.
 
 - **`tests/`** — Integration tests per command: `get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `variant.rs`.
-- **`benchmarks/`** — Dockerized benchmark harness measuring token usage on Elm coding tasks. Currently baseline-only (`control` arm); a CLI-oriented oracle treatment arm is planned in the next change (`benchmark-oracle-arm`).
+- **`benchmarks/`** — Dockerized benchmark harness measuring token usage on Elm coding tasks. Two arms: `control` (Claude without elmq guidance) and `treatment` (elmq CLI guidance injected via `--append-system-prompt-file benchmarks/elmq-guide.md`). Answers Q1: does elmq save tokens given Claude knows how to use it?
 
 ## Conventions
 

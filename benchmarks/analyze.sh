@@ -11,7 +11,7 @@ SCENARIOS=(
     "05-add-variant"
 )
 
-ARMS=("control")
+ARMS=("control" "treatment")
 
 # Extract token metrics from a session.json (stream-json format: one JSON object per line)
 # The result message (last line with type=result) contains usage data.

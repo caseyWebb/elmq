@@ -16,9 +16,8 @@ TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%S)"
 
 ARM="${1:-control}"
 
-if [[ "$ARM" != "control" && "$ARM" != "all" ]]; then
-    echo "Usage: run.sh [control|all]" >&2
-    echo "(treatment arms are retired until the benchmark-oracle-arm change lands)" >&2
+if [[ "$ARM" != "control" && "$ARM" != "treatment" && "$ARM" != "all" ]]; then
+    echo "Usage: run.sh [control|treatment|all]" >&2
     exit 1
 fi
 
@@ -59,6 +58,11 @@ run_arm() {
         --dangerously-skip-permissions
         --append-system-prompt-file "$SYSTEM_PROMPT"
     )
+
+    # Treatment arm: inject elmq guidance via a second system-prompt file
+    if [[ "$arm" == "treatment" ]]; then
+        claude_base+=(--append-system-prompt-file "$BENCH_DIR/elmq-guide.md")
+    fi
 
     for scenario in "${SCENARIOS[@]}"; do
         local scenario_dir="$run_dir/$scenario"
@@ -119,6 +123,10 @@ run_arm() {
 # Run requested arms
 if [[ "$ARM" == "control" || "$ARM" == "all" ]]; then
     run_arm "control"
+fi
+
+if [[ "$ARM" == "treatment" || "$ARM" == "all" ]]; then
+    run_arm "treatment"
 fi
 
 echo ""

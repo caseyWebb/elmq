@@ -50,7 +50,21 @@ LLM-harness packaging (MCP, skill, plugin, npm) will return as a dedicated phase
 - `move-decl` — move declarations between modules with import-aware body rewriting, automatic helper detection, and project-wide reference updates ✓
 - `variant add`/`variant rm` — add or remove type constructors with project-wide case expression propagation ✓
 
-## Phase 5: Advanced
+## Phase 5: Benchmarks and validation (in progress)
+
+The benchmark harness in `benchmarks/` runs Claude Code against `rtfeldman/elm-spa-example` on five sequential Elm editing scenarios (add feature, rename module, extract module, add route, add variant). Two arms:
+
+- **`control`** — Claude works with built-in Read/Write/Edit/Grep, no elmq guidance
+- **`treatment`** — Claude gets elmq CLI guidance via a system-prompt injection (`--append-system-prompt-file benchmarks/elmq-guide.md`)
+
+The thesis under test (**Q1**): given Claude knows how to use elmq, does it actually save tokens on Elm editing tasks? A positive answer unlocks the follow-up question (**Q2**): which delivery mechanism (plugin, skill, hook, MCP, etc.) is worth investing in to deliver elmq's guidance at runtime?
+
+Planned follow-ups once Q1 has preliminary data:
+
+- `benchmark-independent-scenarios` — replace sequential scenarios with git-tag-based reference checkpoints per scenario (option B from the explore session), eliminating survivorship bias in multi-run averages
+- Q2 packaging experiments — skill arm, hook arm, maybe reintroduce MCP if the upstream Claude Code stdio registration bug is fixed
+
+## Phase 6: Advanced
 
 - Type-aware queries (find functions matching a type signature)
 - Unused import/declaration detection

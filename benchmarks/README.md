@@ -1,12 +1,13 @@
 # elmq Benchmark Harness
 
-Measures token usage of Claude Code on identical Elm coding tasks. Currently a baseline-only setup — a treatment arm is scheduled to return in the follow-up `benchmark-oracle-arm` change.
+Measures token usage of Claude Code on identical Elm coding tasks. Two arms so we can compare "Claude without elmq guidance" against "Claude with elmq guidance delivered via system prompt." This answers **Q1: does elmq save tokens on Elm editing tasks, given Claude knows how to use it?** — the ceiling on what any delivery mechanism could achieve.
 
 | Arm | What's different |
 |-----|-----------------|
-| `control` | No elmq guidance — Claude works with built-in Read/Write/Edit on the fixture |
+| `control` | No elmq guidance — Claude works with built-in Read/Write/Edit/Grep on the fixture |
+| `treatment` | elmq CLI guidance injected via a second `--append-system-prompt-file` pointing at `benchmarks/elmq-guide.md` (the "oracle" arm — no MCP, no plugin, no hook) |
 
-Previous `treatment` (MCP server via `--mcp-config`) and `treatment-plugin` (Claude Code plugin) arms were retired alongside the MCP server and the Claude Code plugin in the `drop-mcp-server` change (see `openspec/changes/`). A CLI-oriented oracle treatment arm will be added in the next change.
+The treatment arm is deliberately the simplest possible delivery mechanism. Q2 ("which delivery mechanism is best?" — skill vs. hook vs. MCP vs. something else) is a separate, future experiment that can only be evaluated once Q1 has an answer.
 
 ## Setup
 
@@ -38,7 +39,23 @@ docker run --env-file benchmarks/.env \
   elmq-bench /bench/run.sh control
 ```
 
-Each invocation creates a new timestamped directory under `benchmarks/results/control/` (gitignored). Results accumulate across runs; `analyze.sh` averages per-scenario metrics across every timestamped run in each arm directory, so manual one-at-a-time data collection is the supported workflow.
+Run the treatment arm:
+
+```sh
+docker run --env-file benchmarks/.env \
+  -v "$(pwd)/benchmarks/results:/bench/results" \
+  elmq-bench /bench/run.sh treatment
+```
+
+Run both arms back-to-back:
+
+```sh
+docker run --env-file benchmarks/.env \
+  -v "$(pwd)/benchmarks/results:/bench/results" \
+  elmq-bench /bench/run.sh all
+```
+
+Each invocation creates a new timestamped directory under `benchmarks/results/<arm>/` (gitignored). Results accumulate across runs; `analyze.sh` averages per-scenario metrics across every timestamped run in each arm directory, so manual one-at-a-time data collection is the supported workflow.
 
 ## Analyzing Results
 
