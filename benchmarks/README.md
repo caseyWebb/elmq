@@ -11,15 +11,7 @@ The treatment arm is deliberately the simplest possible delivery mechanism. Q2 (
 
 ## Setup
 
-### 1. Build the Docker image
-
-```sh
-./benchmarks/build.sh
-```
-
-This compiles the elmq release binary and builds the `elmq-bench` Docker image with Node, Elm, Claude Code, and the fixture project (rtfeldman/elm-spa-example).
-
-### 2. Create auth credentials
+### Create auth credentials
 
 Run `claude setup-token` to get an OAuth token, then create `benchmarks/.env`:
 
@@ -28,6 +20,14 @@ CLAUDE_CODE_OAUTH_TOKEN=your-token-here
 ```
 
 This file is gitignored.
+
+The Docker image is built automatically on every `./benchmark.sh` invocation (Docker's layer cache makes this cheap when sources are unchanged; the Rust compile and `COPY benchmarks/*` layers only re-run when their inputs change). If you want to build manually — for example, to surface compile errors before a benchmark run — use:
+
+```sh
+./benchmarks/build.sh
+```
+
+This compiles the elmq release binary and builds the `elmq-bench` image with Node, Elm, Claude Code, and the fixture project (rtfeldman/elm-spa-example).
 
 ## Running Benchmarks
 

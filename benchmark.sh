@@ -87,10 +87,14 @@ if [[ ! -f "$ENV_FILE" ]]; then
     exit 1
 fi
 
-# Pre-flight: docker image
-if ! docker image inspect elmq-bench >/dev/null 2>&1; then
-    echo "Error: elmq-bench Docker image does not exist." >&2
-    echo "Build it first: ./benchmarks/build.sh" >&2
+# Build (or rebuild) the Docker image. Docker's layer cache makes this
+# cheap when sources are unchanged: the Rust compilation layer and the
+# benchmarks/* COPY layers all short-circuit if their inputs haven't
+# changed. When sources *have* changed, this ensures parallel runs use
+# the latest elmq binary and guide content.
+echo "Building elmq-bench image (cached layers will be reused)..."
+if ! "$REPO_ROOT/benchmarks/build.sh" >/dev/null; then
+    echo "Error: ./benchmarks/build.sh failed. Re-run it directly to see the error output." >&2
     exit 1
 fi
 
