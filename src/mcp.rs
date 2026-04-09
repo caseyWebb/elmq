@@ -66,7 +66,33 @@ impl ServerHandler for ElmqServer {
 
 // -- Parameter types --
 
+// The Anthropic API rejects type arrays like ["string", "null"] that schemars
+// generates for Option<T>. Strip them down to just the non-null type.
+fn strip_null_types(schema: &mut schemars::Schema) {
+    if let Some(obj) = schema.as_object_mut() {
+        if let Some(props) = obj.get_mut("properties") {
+            if let Some(props_obj) = props.as_object_mut() {
+                for (_key, prop) in props_obj.iter_mut() {
+                    if let Some(prop_obj) = prop.as_object_mut() {
+                        if let Some(serde_json::Value::Array(types)) = prop_obj.get("type") {
+                            let non_null: Vec<_> = types
+                                .iter()
+                                .filter(|t| t.as_str() != Some("null"))
+                                .cloned()
+                                .collect();
+                            if non_null.len() == 1 {
+                                prop_obj.insert("type".to_owned(), non_null[0].clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = strip_null_types)]
 pub struct SummaryParams {
     /// Path to the Elm file
     pub file: String,
@@ -77,6 +103,7 @@ pub struct SummaryParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = strip_null_types)]
 pub struct GetParams {
     /// Path to the Elm file
     pub file: String,
@@ -87,6 +114,7 @@ pub struct GetParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = strip_null_types)]
 pub struct SetParams {
     /// Path to the Elm file
     pub file: String,
@@ -149,6 +177,7 @@ pub struct UnexposeParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = strip_null_types)]
 pub struct MvParams {
     /// Path to the Elm file
     pub file: String,
@@ -159,6 +188,7 @@ pub struct MvParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = strip_null_types)]
 pub struct RenameParams {
     /// Path to the Elm file
     pub file: String,
@@ -171,6 +201,7 @@ pub struct RenameParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = strip_null_types)]
 pub struct MoveDeclParams {
     /// Path to the Elm file
     pub file: String,
@@ -185,6 +216,7 @@ pub struct MoveDeclParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = strip_null_types)]
 pub struct AddVariantParams {
     /// Path to the Elm file
     pub file: String,
@@ -197,6 +229,7 @@ pub struct AddVariantParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = strip_null_types)]
 pub struct RmVariantParams {
     /// Path to the Elm file
     pub file: String,
@@ -209,6 +242,7 @@ pub struct RmVariantParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = strip_null_types)]
 pub struct RefsParams {
     /// Path to the Elm file whose module to search for
     pub file: String,

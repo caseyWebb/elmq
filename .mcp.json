@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "elmq-dev": {
-      "command": "cargo",
-      "args": ["run", "--release", "--", "mcp"]
-    }
-  }
-}

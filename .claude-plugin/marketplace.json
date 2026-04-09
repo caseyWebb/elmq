@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "elmq",
-      "source": ".",
+      "source": "./",
       "description": "Elm file query and edit tools via elmq MCP server. Auto-detects Elm projects and guides Claude to prefer structured elmq tools over built-in Read/Write/Edit.",
       "version": "0.1.0"
     }

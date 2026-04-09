@@ -5,7 +5,7 @@
   "repository": "https://github.com/caseyWebb/elmq",
   "mcpServers": {
     "elmq": {
-      "command": "elmq",
+      "command": "${CLAUDE_PLUGIN_ROOT}/target/release/elmq",
       "args": ["mcp"]
     }
   },
