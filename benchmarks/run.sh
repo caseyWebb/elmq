@@ -12,7 +12,7 @@ FIXTURE_DIR="$BENCH_DIR/fixture"
 RESULTS_DIR="$BENCH_DIR/results"
 SCENARIOS_DIR="$BENCH_DIR/scenarios"
 SYSTEM_PROMPT="$BENCH_DIR/system-prompt.md"
-TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%S)"
+TIMESTAMP="${BENCHMARK_RUN_ID:-$(date -u +%Y-%m-%dT%H:%M:%S)}"
 
 ARM="${1:-control}"
 

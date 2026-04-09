@@ -31,31 +31,28 @@ This file is gitignored.
 
 ## Running Benchmarks
 
-Run the control arm:
+The recommended entry point is `./benchmark.sh` at the repo root — a thin wrapper that launches multiple runs in parallel, scopes each to its own results directory, and captures per-run logs.
+
+```sh
+./benchmark.sh                     # 1 control + 1 treatment in parallel
+./benchmark.sh -n 3                # 3 of each (6 parallel runs)
+./benchmark.sh control             # 1 control only
+./benchmark.sh treatment -n 5      # 5 treatments in parallel
+```
+
+Each run is scoped as `benchmarks/results/<arm>/<TIMESTAMP>-<arm>-<index>/` and its stdout/stderr goes to `benchmarks/results/logs/<TIMESTAMP>-<arm>-<index>.log`. All timestamped directories in each arm accumulate across batches; `analyze.sh` averages across every run it finds, so running `./benchmark.sh -n 3` today and again tomorrow gives you 6 samples per arm to compare.
+
+Rate limits and system resources cap the practical value of `N`. Start with `-n 2` or `-n 3`; very large values will hit Anthropic rate limits and/or saturate Docker.
+
+### Direct invocation (advanced)
+
+You can still invoke `run.sh` inside the container directly if you want to bypass the wrapper (e.g. for a one-off run without parallelization). The wrapper passes a `BENCHMARK_RUN_ID` environment variable to scope the results dir; if you omit it, `run.sh` falls back to a `date`-based timestamp.
 
 ```sh
 docker run --env-file benchmarks/.env \
   -v "$(pwd)/benchmarks/results:/bench/results" \
   elmq-bench /bench/run.sh control
 ```
-
-Run the treatment arm:
-
-```sh
-docker run --env-file benchmarks/.env \
-  -v "$(pwd)/benchmarks/results:/bench/results" \
-  elmq-bench /bench/run.sh treatment
-```
-
-Run both arms back-to-back:
-
-```sh
-docker run --env-file benchmarks/.env \
-  -v "$(pwd)/benchmarks/results:/bench/results" \
-  elmq-bench /bench/run.sh all
-```
-
-Each invocation creates a new timestamped directory under `benchmarks/results/<arm>/` (gitignored). Results accumulate across runs; `analyze.sh` averages per-scenario metrics across every timestamped run in each arm directory, so manual one-at-a-time data collection is the supported workflow.
 
 ## Analyzing Results
 
