@@ -4,11 +4,11 @@ update-when: CLI commands, output format, or installation steps change
 
 # elmq
 
-A CLI and MCP server for querying and editing Elm files — like jq for Elm.
+A CLI for querying and editing Elm files — like jq for Elm.
 
-Designed as a next-gen LSP for agents and scripts, not editors. Optimized for token efficiency and structured tool calling.
+Designed as a next-gen LSP for agents and scripts, not editors. Optimized for token efficiency and structured output.
 
-> **Status:** Active development. Supports reading and writing Elm declarations, imports, and module lines. MCP server available via `elmq mcp`. See [ROADMAP.md](ROADMAP.md) for what's planned.
+> **Status:** Active development. Supports reading and writing Elm declarations, imports, and module lines, plus project-wide operations (rename, move, extract, add/remove variant). See [ROADMAP.md](ROADMAP.md) for what's planned.
 
 ## Install
 
@@ -275,35 +275,11 @@ elmq list src/Main.elm --format json
 }
 ```
 
-## MCP Server
+## Using elmq with LLM coding agents
 
-Start the MCP server (stdio transport):
+elmq is designed to be used from any coding agent that can shell out to a CLI (Claude Code, Cursor, Aider, Codex, etc.) — pair it with a system prompt or skill that tells the agent to prefer `elmq <subcommand>` over generic `Read`/`Write`/`Edit` on `.elm` files.
 
-```sh
-elmq mcp
-```
-
-Exposes 4 tools optimized for LLM agents:
-
-| Tool | Description |
-|------|-------------|
-| `elm_summary` | File overview: module, imports, declarations with types and line numbers |
-| `elm_get` | Extract full source text of a declaration by name |
-| `elm_edit` | All file mutations: `set`, `patch`, `rm`, `mv`, `rename`, `move_decl`, `add_variant`, `rm_variant`, `add_import`, `remove_import`, `expose`, `unexpose` |
-| `elm_refs` | Find all references to a module or declaration across the project |
-
-Configure in your MCP client (e.g. Claude Code `settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "elmq": {
-      "command": "elmq",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+Dedicated LLM-harness packaging (Claude Code plugin, skill, npm wrapper, etc.) is deferred until the benchmark in `benchmarks/` proves the token-savings thesis against a baseline. Until then, the CLI is the supported interface.
 
 ## Roadmap
 

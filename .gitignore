@@ -1,2 +1,4 @@
 /target
 openspec/changes/
+benchmarks/results/
+benchmarks/.env

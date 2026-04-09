@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is elmq?
 
-A Rust CLI and MCP server for querying and editing Elm files — like jq for Elm. Uses tree-sitter-elm for parsing. Supports reading (`list`, `get`), writing (`set`, `patch`, `rm`, `import`, `expose`/`unexpose`), and project-wide operations (`mv` — rename a module and update all references; `refs` — find all references to a module or declaration; `rename` — rename a declaration project-wide; `move-decl` — move declarations between modules with import-aware body rewriting; `variant add`/`variant rm` — add or remove type variant constructors with project-wide case expression propagation). The MCP server (`elmq mcp`) exposes 4 consolidated tools over stdio transport.
+A Rust CLI for querying and editing Elm files — like jq for Elm. Uses tree-sitter-elm for parsing. Supports reading (`list`, `get`), writing (`set`, `patch`, `rm`, `import`, `expose`/`unexpose`), and project-wide operations (`mv` — rename a module and update all references; `refs` — find all references to a module or declaration; `rename` — rename a declaration project-wide; `move-decl` — move declarations between modules with import-aware body rewriting; `variant add`/`variant rm` — add or remove type variant constructors with project-wide case expression propagation).
 
 ## Build & Test Commands
 
@@ -36,12 +36,12 @@ Rust toolchain is pinned in `rust-toolchain.toml` (rustup installs it automatica
 - **`src/move_decl.rs`** — Move-declaration orchestration: `execute_move_declaration()` moves declarations between modules with import-aware body rewriting, automatic helper detection, dependency analysis, and project-wide reference updates.
 - **`src/variant.rs`** — Variant command: `execute_add_variant()` and `execute_rm_variant()` add/remove constructors from custom types and propagate through all case expressions project-wide. Builds a constructor map for type resolution, walks `case_of_expr` nodes, handles tuple patterns, generates `Debug.todo` branches for add and removes matching branches for rm.
 - **`src/cli.rs`** — clap derive definitions (`Cli`, `Command`, `ImportCommand`, `VariantCommand`, `Format`).
-- **`src/mcp.rs`** — MCP stdio server: `ElmqServer` handler with 4 tools (`elm_summary`, `elm_get`, `elm_edit`, `elm_refs`), tagged union parameter types, and `run_mcp_server()` entry point. Uses `rmcp` SDK.
-- **`src/main.rs`** — Thin CLI entry point. Reads file, calls parser/writer, formats output. The `mv`, `refs`, `rename`, `move-decl`, and `variant` commands use `project.rs` for multi-file operations. The `mcp` subcommand creates a tokio runtime and starts the MCP server. Not part of the library crate.
+- **`src/main.rs`** — Thin CLI entry point. Reads file, calls parser/writer, formats output. The `mv`, `refs`, `rename`, `move-decl`, and `variant` commands use `project.rs` for multi-file operations. Not part of the library crate.
 
 The library (`lib.rs` + `parser.rs` + `imports.rs` + `writer.rs` + `project.rs` + `refs.rs` + `move_decl.rs` + `variant.rs`) is fully testable without the CLI binary.
 
-- **`tests/`** — Integration tests per command: `get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `variant.rs`, `mcp.rs`.
+- **`tests/`** — Integration tests per command: `get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `variant.rs`.
+- **`benchmarks/`** — Dockerized benchmark harness measuring token usage on Elm coding tasks. Two arms: `control` (Claude without elmq guidance) and `treatment` (elmq CLI guidance injected via `--append-system-prompt-file benchmarks/elmq-guide.md`). Answers Q1: does elmq save tokens given Claude knows how to use it? Run via `./benchmark.sh [control|treatment] [-n N]` at the repo root — the wrapper launches parallel runs with scoped results directories.
 
 ## Conventions
 
