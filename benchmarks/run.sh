@@ -12,14 +12,13 @@ FIXTURE_DIR="$BENCH_DIR/fixture"
 RESULTS_DIR="$BENCH_DIR/results"
 SCENARIOS_DIR="$BENCH_DIR/scenarios"
 SYSTEM_PROMPT="$BENCH_DIR/system-prompt.md"
-MCP_CONFIG="$BENCH_DIR/mcp-config.json"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%S)"
 
-PLUGIN_DIR="$BENCH_DIR/claude-plugin"
-ARM="${1:-all}"
+ARM="${1:-control}"
 
-if [[ "$ARM" != "control" && "$ARM" != "treatment" && "$ARM" != "treatment-plugin" && "$ARM" != "all" ]]; then
-    echo "Usage: run.sh [control|treatment|treatment-plugin|all]" >&2
+if [[ "$ARM" != "control" && "$ARM" != "all" ]]; then
+    echo "Usage: run.sh [control|all]" >&2
+    echo "(treatment arms are retired until the benchmark-oracle-arm change lands)" >&2
     exit 1
 fi
 
@@ -61,12 +60,6 @@ run_arm() {
         --append-system-prompt-file "$SYSTEM_PROMPT"
     )
 
-    if [[ "$arm" == "treatment" ]]; then
-        claude_base+=(--mcp-config "$MCP_CONFIG")
-    elif [[ "$arm" == "treatment-plugin" ]]; then
-        claude_base+=(--plugin-dir "$PLUGIN_DIR")
-    fi
-
     for scenario in "${SCENARIOS[@]}"; do
         local scenario_dir="$run_dir/$scenario"
         mkdir -p "$scenario_dir"
@@ -94,10 +87,6 @@ run_arm() {
                 elif .name == "Glob" then .input.pattern // ""
                 elif .name == "Grep" then .input.pattern // ""
                 elif .name == "Agent" then .input.description // ""
-                elif .name == "elm_summary" then .input.file // ""
-                elif .name == "elm_get" then "\(.input.file // "") \(.input.name // "")"
-                elif .name == "elm_edit" then "\(.input.file // "") \(.input.action // "")"
-                elif .name == "elm_refs" then "\(.input.file // "") \(.input.name // "")"
                 else ""
             end)' 2>/dev/null; then
             echo "Claude completed successfully"
@@ -130,14 +119,6 @@ run_arm() {
 # Run requested arms
 if [[ "$ARM" == "control" || "$ARM" == "all" ]]; then
     run_arm "control"
-fi
-
-if [[ "$ARM" == "treatment" || "$ARM" == "all" ]]; then
-    run_arm "treatment"
-fi
-
-if [[ "$ARM" == "treatment-plugin" || "$ARM" == "all" ]]; then
-    run_arm "treatment-plugin"
 fi
 
 echo ""

@@ -4,11 +4,11 @@ update-when: CLI commands, output format, or installation steps change
 
 # elmq
 
-A CLI and MCP server for querying and editing Elm files — like jq for Elm.
+A CLI for querying and editing Elm files — like jq for Elm.
 
-Designed as a next-gen LSP for agents and scripts, not editors. Optimized for token efficiency and structured tool calling.
+Designed as a next-gen LSP for agents and scripts, not editors. Optimized for token efficiency and structured output.
 
-> **Status:** Active development. Supports reading and writing Elm declarations, imports, and module lines. MCP server available via `elmq mcp`. See [ROADMAP.md](ROADMAP.md) for what's planned.
+> **Status:** Active development. Supports reading and writing Elm declarations, imports, and module lines, plus project-wide operations (rename, move, extract, add/remove variant). See [ROADMAP.md](ROADMAP.md) for what's planned.
 
 ## Install
 
@@ -275,65 +275,11 @@ elmq list src/Main.elm --format json
 }
 ```
 
-## MCP Server
+## Using elmq with LLM coding agents
 
-Start the MCP server (stdio transport):
+elmq is designed to be used from any coding agent that can shell out to a CLI (Claude Code, Cursor, Aider, Codex, etc.) — pair it with a system prompt or skill that tells the agent to prefer `elmq <subcommand>` over generic `Read`/`Write`/`Edit` on `.elm` files.
 
-```sh
-elmq mcp
-```
-
-Exposes 15 tools optimized for LLM agents:
-
-| Tool | Description |
-|------|-------------|
-| `elm_summary` | File overview: module, imports, declarations with types and line numbers |
-| `elm_get` | Extract full source text of a declaration by name |
-| `elm_set` | Upsert a declaration (insert or replace) |
-| `elm_patch` | Find-and-replace within a specific declaration |
-| `elm_rm` | Remove a declaration |
-| `elm_add_import` | Add or replace an import clause |
-| `elm_rm_import` | Remove an import by module name |
-| `elm_expose` | Add an item to the module's exposing list |
-| `elm_unexpose` | Remove an item from the module's exposing list |
-| `elm_mv` | Rename/move a module, update all references project-wide |
-| `elm_rename` | Rename a declaration, update all references project-wide |
-| `elm_move_decl` | Move declarations between modules with import-aware rewriting |
-| `elm_add_variant` | Add a type constructor, propagate case expressions project-wide |
-| `elm_rm_variant` | Remove a type constructor, remove case branches project-wide |
-| `elm_refs` | Find all references to a module or declaration across the project |
-
-### Claude Code Plugin
-
-For best results with Claude Code, install the elmq plugin:
-
-```sh
-/plugin marketplace add caseyWebb/elmq
-/plugin install elmq@elmq
-```
-
-Or load directly for testing:
-
-```sh
-claude --plugin-dir path/to/elmq/.claude-plugin
-```
-
-The plugin auto-registers the MCP server and includes a SessionStart hook that detects Elm projects (via `elm.json`) and guides Claude to prefer elmq tools over built-in Read/Write/Edit for `.elm` files. The guidance survives context compaction.
-
-### Manual MCP Configuration
-
-Alternatively, configure the MCP server directly in your MCP client (e.g. Claude Code `settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "elmq": {
-      "command": "elmq",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+Dedicated LLM-harness packaging (Claude Code plugin, skill, npm wrapper, etc.) is deferred until the benchmark in `benchmarks/` proves the token-savings thesis against a baseline. Until then, the CLI is the supported interface.
 
 ## Roadmap
 

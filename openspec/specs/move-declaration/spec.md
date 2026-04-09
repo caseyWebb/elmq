@@ -135,15 +135,3 @@ The system SHALL update all files in the project that reference moved declaratio
 - **WHEN** `funcA` is moved from `Source`
 - **THEN** `Other.elm` SHALL not be modified (consistent with `refs` and `rename` behavior)
 
-### Requirement: MCP integration
-The `elm_edit` MCP tool SHALL support a `move_decl` action.
-
-Parameters:
-- `names` (array of strings, required): Declaration names to move
-- `target` (string, required): Path to the target Elm file
-- `copy_shared_helpers` (boolean, optional): Copy shared helpers instead of erroring — default `false`
-- `dry_run` (boolean, optional): Preview without writing — default `false`
-
-#### Scenario: MCP move declaration
-- **WHEN** `elm_edit` is called with `{"action": "move_decl", "file": "src/Source.elm", "names": ["funcA"], "target": "src/Target.elm"}`
-- **THEN** it SHALL perform the move and return a JSON summary of changes

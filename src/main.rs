@@ -1,5 +1,4 @@
 mod cli;
-mod mcp;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -349,11 +348,6 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Command::Mcp => {
-            tokio::runtime::Runtime::new()
-                .context("failed to create tokio runtime")?
-                .block_on(mcp::run_mcp_server())?;
-        }
     }
 
     Ok(())

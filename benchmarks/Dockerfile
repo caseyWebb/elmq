@@ -19,11 +19,9 @@ COPY benchmarks/fixture/ /bench/fixture/
 RUN rm -rf /bench/fixture/.git
 COPY benchmarks/scenarios/ /bench/scenarios/
 COPY benchmarks/system-prompt.md /bench/system-prompt.md
-COPY benchmarks/mcp-config.json /bench/mcp-config.json
 COPY benchmarks/run.sh /bench/run.sh
 COPY benchmarks/analyze.sh /bench/analyze.sh
-COPY .claude-plugin/ /bench/claude-plugin/.claude-plugin/
-RUN chmod +x /bench/run.sh /bench/analyze.sh /bench/claude-plugin/.claude-plugin/hooks/*.sh
+RUN chmod +x /bench/run.sh /bench/analyze.sh
 
 # Pre-populate elm-stuff so runs don't need network
 WORKDIR /bench/fixture

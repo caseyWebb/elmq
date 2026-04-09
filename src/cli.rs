@@ -166,8 +166,6 @@ pub enum Command {
         #[command(subcommand)]
         command: VariantCommand,
     },
-    /// Start MCP server (stdio transport)
-    Mcp,
 }
 
 #[derive(Subcommand)]

@@ -11,7 +11,7 @@ SCENARIOS=(
     "05-add-variant"
 )
 
-ARMS=("control" "treatment" "treatment-plugin")
+ARMS=("control")
 
 # Extract token metrics from a session.json (stream-json format: one JSON object per line)
 # The result message (last line with type=result) contains usage data.
@@ -46,8 +46,7 @@ tool_breakdown() {
     if [ ! -f "$file" ]; then
         return
     fi
-    # Match both standard tools (Read, Write, etc.) and MCP tools (elm_*)
-    grep -oE '"(Read|Write|Edit|Bash|Glob|Grep|Agent|ToolSearch|elm_summary|elm_get|elm_edit|elm_refs)"' "$file" \
+    grep -oE '"(Read|Write|Edit|Bash|Glob|Grep|Agent|ToolSearch)"' "$file" \
         | sed 's/"//g' | sort | uniq -c | sort -rn
 }
 
@@ -290,9 +289,6 @@ tool_call_summary() {
             ;;
         Agent)
             summary=$(echo "$input" | jq -r '(.description // .prompt[:80]) + (if .subagent_type then " [\(.subagent_type)]" else "" end)' 2>/dev/null)
-            ;;
-        elm_summary|elm_get|elm_edit|elm_refs)
-            summary=$(echo "$input" | jq -c '.' 2>/dev/null)
             ;;
         *)
             summary=$(echo "$input" | jq -c '.' 2>/dev/null)

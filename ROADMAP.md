@@ -35,12 +35,11 @@ Query and edit Elm files — like jq for Elm. A next-gen LSP for agents and scri
 - Round-trip formatting preservation (comments, whitespace outside edited region)
 - Atomic file writes (write-to-temp, rename-over-original)
 
-## Phase 3: MCP Server ✓
+## Phase 3: MCP Server (retired)
 
-- `elmq mcp` — stdio MCP server using `rmcp` SDK
-- 4 consolidated tools: `elm_summary`, `elm_get`, `elm_edit`, `elm_refs`
-- Tool descriptions optimized for token efficiency
-- Compact output as default for MCP responses
+Built and later removed. The elmq MCP stdio server (`elmq mcp`, `src/mcp.rs`, `rmcp` SDK) was retired as part of the `drop-mcp-server` change because a Claude Code upstream bug (anthropics/claude-code#24762, #36914) prevents local stdio MCP servers from registering their tools in Claude Code sessions, making the entire surface unreachable from the only harness that matters today. The benchmark harness in `benchmarks/` was reshaped to answer "does elmq save tokens?" via a CLI-oriented oracle arm instead of via MCP.
+
+LLM-harness packaging (MCP, skill, plugin, npm) will return as a dedicated phase once the benchmark proves the token-savings thesis and the data informs which packaging model is worth building.
 
 ## Phase 4: Multi-File Operations ✓
 

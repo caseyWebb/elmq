@@ -28,11 +28,10 @@ cargo fmt --check                # check formatting
 
 ```
 src/
-├── main.rs       # CLI entry point, output formatting, MCP startup
+├── main.rs       # CLI entry point, output formatting
 ├── cli.rs        # clap argument definitions
 ├── lib.rs        # public types (Declaration, DeclarationKind)
 ├── imports.rs    # import context abstraction (resolve, emit, merge imports)
-├── mcp.rs        # MCP stdio server (rmcp SDK, 4 tools, tagged union params)
 ├── move_decl.rs  # move declarations between modules with body rewriting
 ├── parser.rs     # tree-sitter-elm parsing and declaration extraction
 ├── project.rs    # project discovery (elm.json, source-directories, module resolution)
@@ -45,7 +44,7 @@ src/
 
 ## Testing
 
-Unit tests live alongside the code in `parser.rs`, `imports.rs`, `writer.rs`, `project.rs`, and `refs.rs`. Integration tests are in `tests/` with one file per command (`get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `mcp.rs`). Run with `cargo test`.
+Unit tests live alongside the code in `parser.rs`, `imports.rs`, `writer.rs`, `project.rs`, and `refs.rs`. Integration tests are in `tests/` with one file per command (`get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `variant.rs`). Run with `cargo test`.
 
 Test fixtures are in `test-fixtures/`. When adding parser features, add or update the sample Elm files there and write corresponding tests. Integration tests use `tempfile` to create temporary copies for write operations.
 
