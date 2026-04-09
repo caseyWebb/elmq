@@ -210,7 +210,7 @@ Renames a declaration (or type constructor) and updates all references across th
 ### Move declarations between modules
 
 ```sh
-elmq move-decl src/Page/Home.elm --name viewHeader --name viewFooter --to src/Shared/Layout.elm
+elmq move-decl src/Page/Home.elm --to src/Shared/Layout.elm viewHeader viewFooter
 ```
 
 ```

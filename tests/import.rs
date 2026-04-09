@@ -97,17 +97,21 @@ fn import_remove_existing() {
 }
 
 #[test]
-fn import_remove_not_found() {
+fn import_remove_not_found_is_idempotent_noop() {
+    // Breaking change vs. prior behavior: removing an import that does not
+    // exist is a successful no-op, not an error. See batch-positional-args
+    // change for rationale.
     let f = with_temp_elm(SAMPLE);
     let path = f.path().to_str().unwrap();
+    let before = std::fs::read_to_string(f.path()).unwrap();
 
     let output = elmq()
         .args(["import", "remove", path, "NonExistent"])
         .output()
         .unwrap();
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("not found"));
+    assert!(output.status.success());
+    let after = std::fs::read_to_string(f.path()).unwrap();
+    assert_eq!(after, before, "file should be unchanged");
 }
 
 #[test]
@@ -142,4 +146,146 @@ fn import_remove_last_import() {
     assert!(!content.contains("import"));
     assert!(content.contains("view = 1"));
     assert!(!content.contains("\n\n\n\n"));
+}
+
+#[test]
+fn import_add_multi_clause_success() {
+    let f = with_temp_elm(NO_IMPORTS);
+    let path = f.path().to_str().unwrap();
+
+    let output = elmq()
+        .args([
+            "import",
+            "add",
+            path,
+            "Http",
+            "Json.Decode exposing (field)",
+            "Html exposing (div)",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert!(content.contains("import Http"));
+    assert!(content.contains("import Json.Decode exposing (field)"));
+    assert!(content.contains("import Html exposing (div)"));
+
+    // Each clause is placed in alphabetical position independently, so the
+    // final file order should be Html, Http, Json.Decode.
+    let html_pos = content.find("import Html").unwrap();
+    let http_pos = content.find("import Http").unwrap();
+    let json_pos = content.find("import Json.Decode").unwrap();
+    assert!(html_pos < http_pos);
+    assert!(http_pos < json_pos);
+}
+
+#[test]
+fn import_add_multi_clause_last_wins() {
+    let f = with_temp_elm(NO_IMPORTS);
+    let path = f.path().to_str().unwrap();
+
+    let output = elmq()
+        .args([
+            "import",
+            "add",
+            path,
+            "Html exposing (div)",
+            "Html exposing (text)",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert!(content.contains("import Html exposing (text)"));
+    assert!(!content.contains("import Html exposing (div)"));
+}
+
+#[test]
+fn import_add_multi_clause_input_order_headers() {
+    let f = with_temp_elm(NO_IMPORTS);
+    let path = f.path().to_str().unwrap();
+
+    let output = elmq()
+        .args([
+            "import",
+            "add",
+            path,
+            "Json.Decode exposing (field)",
+            "Http",
+            "Html exposing (div)",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let p1 = stdout
+        .find("## Json.Decode exposing (field)")
+        .expect("missing header for clause 1");
+    let p2 = stdout.find("## Http").expect("missing header for clause 2");
+    let p3 = stdout
+        .find("## Html exposing (div)")
+        .expect("missing header for clause 3");
+    assert!(p1 < p2, "clause 1 header should precede clause 2 header");
+    assert!(p2 < p3, "clause 2 header should precede clause 3 header");
+}
+
+#[test]
+fn import_remove_multi_module_success() {
+    let f = with_temp_elm(SAMPLE);
+    let path = f.path().to_str().unwrap();
+
+    let output = elmq()
+        .args(["import", "remove", path, "Html", "Html.Attributes"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert!(!content.contains("import Html exposing"));
+    assert!(!content.contains("import Html.Attributes"));
+}
+
+#[test]
+fn import_remove_multi_module_partial_idempotent() {
+    let f = with_temp_elm(SAMPLE);
+    let path = f.path().to_str().unwrap();
+
+    let output = elmq()
+        .args([
+            "import",
+            "remove",
+            path,
+            "Html",
+            "NonExistent",
+            "Html.Attributes",
+        ])
+        .output()
+        .unwrap();
+    // Missing-module removal is idempotent, not an error — overall exit 0.
+    assert_eq!(output.status.code(), Some(0));
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert!(!content.contains("import Html exposing"));
+    assert!(!content.contains("import Html.Attributes"));
+}
+
+#[test]
+fn import_single_clause_output_unchanged() {
+    let f = with_temp_elm(NO_IMPORTS);
+    let path = f.path().to_str().unwrap();
+
+    let output = elmq()
+        .args(["import", "add", path, "Http"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.contains("##"),
+        "single-arg output should not contain header markers, got: {stdout:?}"
+    );
 }

@@ -199,7 +199,8 @@ pub fn add_import(source: &str, summary: &FileSummary, import_clause: &str) -> S
     result
 }
 
-/// Remove an import by module name.
+/// Remove an import by module name. Idempotent: if no import with that name
+/// exists, the source is returned unchanged.
 pub fn remove_import(source: &str, name: &str) -> Result<String> {
     let lines: Vec<&str> = source.lines().collect();
     let mut found = false;
@@ -215,7 +216,7 @@ pub fn remove_import(source: &str, name: &str) -> Result<String> {
     }
 
     if !found {
-        bail!("import '{name}' not found");
+        return Ok(source.to_string());
     }
 
     collapse_blank_lines(&result)
@@ -251,6 +252,8 @@ pub fn expose(source: &str, _summary: &FileSummary, item: &str) -> Result<String
 }
 
 /// Remove an item from the module's exposing list. Auto-expands `(..)`.
+/// Idempotent: if the item is not in the exposing list (and the list is not
+/// `(..)`), the source is returned unchanged.
 pub fn unexpose(source: &str, summary: &FileSummary, item: &str) -> Result<String> {
     let module_decl = find_module_declaration(source)?;
 
@@ -272,7 +275,7 @@ pub fn unexpose(source: &str, summary: &FileSummary, item: &str) -> Result<Strin
         .collect();
 
     if new_items.len() == original_len && !is_wildcard {
-        bail!("'{item}' is not in the exposing list");
+        return Ok(source.to_string());
     }
 
     let new_exposing = format!("({})", new_items.join(", "));

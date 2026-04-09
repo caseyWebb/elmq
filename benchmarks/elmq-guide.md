@@ -1,49 +1,55 @@
-# Working with .elm files: use `elmq`, not built-in tools
+# Working with `.elm` files: use `elmq`
 
-This is an Elm project. The `elmq` CLI is on PATH and is a tree-sitter-aware tool for reading, searching, and editing `.elm` files. It is dramatically cheaper than `Read`/`Write`/`Edit`/`Grep` for anything inside a `.elm` file.
+This is an Elm project. `elmq` is on PATH — a tree-sitter-aware CLI for reading and editing `.elm` files. Use it instead of the built-in tools on `.elm` files:
 
-## Hard rules — read these before touching any .elm file
+- Do not use `Read`. Use `elmq list` / `elmq get`.
+- Do not use `Edit`. Use `elmq patch` / `elmq set` / `elmq rm`.
+- Do not use `Grep`, or `grep` / `rg` via `Bash`, to search Elm code. Use `elmq refs`, which resolves qualified, aliased, and exposed references through the import graph — text search misses all of those.
+- `Write` is fine for creating a new `.elm` file; switch to `elmq` for any further edits.
 
-1. **Do NOT use `Read` on .elm files.** `elmq list <file>` returns the module structure, imports, and every declaration with line ranges in ~10% of Read's tokens. It is your reconnaissance tool — use it every time, not Read.
-2. **Do NOT use `Read` to look at a specific function or type.** `elmq get <file> <name>` returns that declaration's full source in isolation.
-3. **Do NOT use `Edit` on .elm files.** Use `elmq set`, `elmq patch`, or `elmq rm` instead.
-4. **Do NOT use `Grep` to search Elm code.** `elmq refs <file> [<name>]` resolves qualified, aliased, and exposed references through the import graph — `Grep` misses all of those.
-5. **Do NOT invoke `node`, `python3`, `sed`, `awk`, or `perl` via Bash to rewrite .elm files.** That is the anti-pattern elmq exists to replace. Use `elmq patch` or `elmq set`.
+## Reading Elm code
 
-The only acceptable built-in operations on an existing .elm file are `Bash(elm make …)`, `Bash(elm-format …)`, `Bash(elm-test …)`, and the discovery/glob/find tools that return file *lists* (not contents).
+`elmq list` and `elmq get` are targeted exploration tools — use them on files and declarations you need to understand, not carte blanche on the whole project. Discover files with `find` or `Glob` first, then `list` the ones relevant to the task.
 
-## Workflow
+- `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. Add `--docs` for doc comments. Accepts one or more files in a single call.
+- `elmq get <file> <name...>` — full source of one or more declarations from the same file.
+- `elmq refs <file>` — every project file that imports this module.
+- `elmq refs <file> <name...>` — every project reference to one or more declarations in this file.
 
-**Phase 1 — Explore.** Use `Bash(find src -name '*.elm')` or `Glob` to enumerate files. For each file you need to understand, run `elmq list <file>` to see its structure. Do not `Read` any .elm file during exploration.
+## Editing Elm code
 
-**Phase 2 — Dive.** When `elmq list` tells you there's a specific function or type you need to understand, run `elmq get <file> <name>` to pull that declaration's source. Do not `Read` the surrounding file.
-
-**Phase 3 — Search.** When you need to find where something is used, run `elmq refs <file> <name>`. Do not `Grep`.
-
-**Phase 4 — Edit.** Use the appropriate `elmq` subcommand (see the table below). Do not `Edit`.
-
-## Intent → command
+Reach for the highest-level command that matches the intent. The project-wide commands (`mv`, `rename`, `move-decl`, `variant add`, `variant rm`) update every call site in one call — do not reconstruct them manually with `Write` + `rm` + `import add` + fixups.
 
 | Intent | Command |
 |---|---|
-| See a file's structure | `elmq list <file>` (add `--docs` for doc comments) |
-| Get one declaration's source | `elmq get <file> <name>` |
-| Find references to a module | `elmq refs <file>` |
-| Find references to a declaration | `elmq refs <file> <name>` |
-| Upsert a declaration | `elmq set <file>` (source read from stdin; use a heredoc) |
-| Find-replace inside a declaration | `elmq patch <file> <name> --old '…' --new '…'` |
-| Remove a declaration | `elmq rm <file> <name>` |
-| Add an import | `elmq import add <file> 'Html exposing (Html, div)'` |
-| Remove an import | `elmq import remove <file> Html` |
-| Add to exposing list | `elmq expose <file> update` (or `'Msg(..)'`) |
-| Remove from exposing list | `elmq unexpose <file> helper` |
-| Rename/move a module project-wide | `elmq mv <file> <new_path>` (add `--dry-run` to preview) |
+| Rename/move a module project-wide | `elmq mv <file> <new_path>` (`--dry-run` to preview) |
 | Rename a declaration project-wide | `elmq rename <file> <old_name> <new_name>` |
-| Move declarations between modules | `elmq move-decl <file> --name foo --name bar --to <target>` |
-| Add a type variant | `elmq variant add <file> --type Msg 'SetName String'` |
-| Remove a type variant | `elmq variant rm <file> --type Msg Decrement` |
+| Extract declarations into a new module, or move declarations between modules | `elmq move-decl <src> --to <target> <name...>` (creates `<target>` if it doesn't exist) |
+| Add a type variant | `elmq variant add --type <TypeName> <file> '<Variant def>'` |
+| Remove a type variant | `elmq variant rm --type <TypeName> <file> <Constructor>` |
+| Find-replace inside a declaration | `elmq patch --old '…' --new '…' <file> <name>` |
+| Upsert a declaration | `elmq set <file>` (source from stdin via heredoc) |
+| Remove declarations | `elmq rm <file> <name...>` |
+| Add imports | `elmq import add <file> 'Html exposing (Html, div)' ...` |
+| Remove imports | `elmq import remove <file> Html ...` |
+| Add to exposing list | `elmq expose <file> update ...` (or `'Msg(..)'`) |
+| Remove from exposing list | `elmq unexpose <file> helper ...` |
 
-`elmq set` reads source from stdin. Pipe via heredoc:
+### Extracting declarations into a new module
+
+A task like *"extract `Cred`, `username`, `credHeader`, `credDecoder` from `src/Api.elm` into a new `src/Api/Cred.elm`"* is one `elmq move-decl` call:
+
+```
+elmq move-decl src/Api.elm \
+  --to src/Api/Cred.elm \
+  Cred username credHeader credDecoder
+```
+
+`move-decl` creates the target file, removes the declarations from the source, updates both files' `exposing (…)` lists, and rewrites every qualified reference in the project to use the new module path.
+
+### `elmq set` stdin
+
+`elmq set` reads source from stdin via heredoc:
 
 ```
 elmq set src/Main.elm << 'ELM'
@@ -52,12 +58,10 @@ update msg model = ...
 ELM
 ```
 
-## Creating a brand-new .elm file
+Prefer `elmq patch` for fragment edits (new case branch, record field, parameter, body tweak); reserve `elmq set` for whole-body rewrites.
 
-When the file does not yet exist, use `Write` **once** with the full module source. Do not try `cat > ... << EOF`, `touch` + `elmq set`, `python3 -c`, or `node -e` — they all fail or flail. Just call `Write` directly with the complete file content.
+## Gotchas
 
-After the file exists, switch back to `elmq` for any further edits.
-
-## Everything else
-
-`Bash` is for running `elm make`, `elm-format`, `elm-test`, `elm-review`, and other shell tools. `Glob` and `find` are for listing files. Everything that looks inside a `.elm` file goes through `elmq`.
+- **Multi-argument output is framed.** Commands that accept `<...>` positional rest (`list`, `get`, `rm`, `refs`, `import add`, `import remove`, `expose`, `unexpose`, `move-decl`) run best-effort per argument: a bad argument does not abort the others. With two or more arguments, output is `## <arg>` blocks in input order, with per-argument errors rendered inline as `error: …` on stdout (not stderr). Single-argument calls produce bare output unchanged. Exit `2` if any argument failed, `0` otherwise.
+- **`unexpose` and `import remove` are idempotent.** Unexposing an item that isn't exposed, or removing an import that doesn't exist, is a successful no-op — not an error.
+- **`variant add` branches are `Debug.todo "<VariantName>"`.** If you want to fill them in with `elmq patch` afterward, `get` the destination first to see the exact placeholder text — do not guess.

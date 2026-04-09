@@ -10,10 +10,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Show a summary of an Elm file
+    /// Show a summary of one or more Elm files
     List {
-        /// Path to the Elm file
-        file: PathBuf,
+        /// Paths to the Elm files (one or more)
+        #[arg(num_args = 1.., required = true)]
+        files: Vec<PathBuf>,
 
         /// Output format
         #[arg(long, value_enum, default_value_t = Format::Compact)]
@@ -23,13 +24,14 @@ pub enum Command {
         #[arg(long)]
         docs: bool,
     },
-    /// Extract the full source of a declaration by name
+    /// Extract the full source of one or more declarations by name
     Get {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Name of the declaration to extract
-        name: String,
+        /// Names of declarations to extract (one or more)
+        #[arg(num_args = 1.., required = true)]
+        names: Vec<String>,
 
         /// Output format
         #[arg(long, value_enum, default_value_t = Format::Compact)]
@@ -60,34 +62,37 @@ pub enum Command {
         #[arg(long)]
         new: String,
     },
-    /// Remove a declaration by name
+    /// Remove one or more declarations by name
     Rm {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Name of the declaration to remove
-        name: String,
+        /// Names of declarations to remove (one or more)
+        #[arg(num_args = 1.., required = true)]
+        names: Vec<String>,
     },
     /// Manage imports
     Import {
         #[command(subcommand)]
         command: ImportCommand,
     },
-    /// Add an item to the module's exposing list
+    /// Add one or more items to the module's exposing list
     Expose {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Item to expose (e.g. "update" or "Msg(..)")
-        item: String,
+        /// Items to expose (one or more, e.g. "update", "Msg(..)")
+        #[arg(num_args = 1.., required = true)]
+        items: Vec<String>,
     },
-    /// Remove an item from the module's exposing list
+    /// Remove one or more items from the module's exposing list
     Unexpose {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Item to unexpose (e.g. "helper")
-        item: String,
+        /// Items to unexpose (one or more)
+        #[arg(num_args = 1.., required = true)]
+        items: Vec<String>,
     },
     /// Rename a module: move file and update all imports and qualified references
     Mv {
@@ -105,13 +110,14 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Find all references to a module or declaration across the project
+    /// Find all references to a module or one or more declarations across the project
     Refs {
         /// Path to the Elm file whose module to search for
         file: PathBuf,
 
-        /// Declaration name to search for (if omitted, reports module-level imports)
-        name: Option<String>,
+        /// Declaration names to search for (zero or more; if omitted, reports module-level imports)
+        #[arg(num_args = 0..)]
+        names: Vec<String>,
 
         /// Output format
         #[arg(long, value_enum, default_value_t = Format::Compact)]
@@ -141,13 +147,13 @@ pub enum Command {
         /// Path to the source Elm file
         file: PathBuf,
 
-        /// Names of declarations to move (can be repeated)
-        #[arg(long = "name")]
-        names: Vec<String>,
-
         /// Path to the target Elm file
         #[arg(long = "to")]
         target: PathBuf,
+
+        /// Names of declarations to move (one or more, positional)
+        #[arg(num_args = 1.., required = true)]
+        names: Vec<String>,
 
         /// Copy shared helpers instead of erroring
         #[arg(long)]
@@ -214,21 +220,23 @@ pub enum VariantCommand {
 
 #[derive(Subcommand)]
 pub enum ImportCommand {
-    /// Add or replace an import
+    /// Add one or more imports
     Add {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Import clause (e.g. "Html exposing (Html, div, text)")
-        import: String,
+        /// Import clauses (one or more, e.g. "Html exposing (Html, div, text)")
+        #[arg(num_args = 1.., required = true)]
+        imports: Vec<String>,
     },
-    /// Remove an import by module name
+    /// Remove one or more imports by module name
     Remove {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Module name to remove (e.g. "Html")
-        module_name: String,
+        /// Module names to remove (one or more)
+        #[arg(num_args = 1.., required = true)]
+        module_names: Vec<String>,
     },
 }
 

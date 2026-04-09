@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is elmq?
 
-A Rust CLI for querying and editing Elm files — like jq for Elm. Uses tree-sitter-elm for parsing. Supports reading (`list`, `get`), writing (`set`, `patch`, `rm`, `import`, `expose`/`unexpose`), and project-wide operations (`mv` — rename a module and update all references; `refs` — find all references to a module or declaration; `rename` — rename a declaration project-wide; `move-decl` — move declarations between modules with import-aware body rewriting; `variant add`/`variant rm` — add or remove type variant constructors with project-wide case expression propagation).
+A Rust CLI for querying and editing Elm files — like jq for Elm. Uses tree-sitter-elm for parsing. Supports reading (`list`, `get`), writing (`set`, `patch`, `rm`, `import`, `expose`/`unexpose`), and project-wide operations (`mv` — rename a module and update all references; `refs` — find all references to a module or declaration; `rename` — rename a declaration project-wide; `move-decl` — move declarations between modules with import-aware body rewriting; `variant add`/`variant rm` — add or remove type variant constructors with project-wide case expression propagation). Most subcommands accept multiple positional arguments per call (e.g. `list FILE...`, `get/rm FILE NAME...`, `refs FILE [NAME...]`, `import add/remove FILE ARG...`, `expose/unexpose FILE ITEM...`, `move-decl FILE --to TARGET NAME...`); multi-arg output is framed as `## <arg>` blocks in input order.
 
 ## Build & Test Commands
 
@@ -41,7 +41,7 @@ Rust toolchain is pinned in `rust-toolchain.toml` (rustup installs it automatica
 The library (`lib.rs` + `parser.rs` + `imports.rs` + `writer.rs` + `project.rs` + `refs.rs` + `move_decl.rs` + `variant.rs`) is fully testable without the CLI binary.
 
 - **`tests/`** — Integration tests per command: `get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `variant.rs`.
-- **`benchmarks/`** — Dockerized benchmark harness measuring token usage on Elm coding tasks. Two arms: `control` (Claude without elmq guidance) and `treatment` (elmq CLI guidance injected via `--append-system-prompt-file benchmarks/elmq-guide.md`). Answers Q1: does elmq save tokens given Claude knows how to use it? Run via `./benchmark.sh [control|treatment] [-n N]` at the repo root — the wrapper launches parallel runs with scoped results directories.
+- **`benchmarks/`** — Dockerized benchmark harness measuring token usage on Elm coding tasks. Two arms: `control` (Claude without elmq guidance) and `treatment` (elmq CLI guidance delivered as `CLAUDE.md` in the treatment workdir, which propagates to spawned `Task`/`Agent` subagents — unlike `--append-system-prompt-file`, which does not). Answers Q1: does elmq save tokens given Claude knows how to use it? Run via `./benchmark.sh [control|treatment] [-n N]` at the repo root — the wrapper launches parallel runs with scoped results directories.
 
 ## Conventions
 

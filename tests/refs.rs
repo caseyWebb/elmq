@@ -172,7 +172,10 @@ fn refs_type_declaration() {
 }
 
 #[test]
-fn refs_declaration_no_refs() {
+fn refs_declaration_nonexistent_is_per_name_error() {
+    // Under batch-positional-args: asking refs about a declaration that
+    // does not exist in the target file is a per-name error (exit 2,
+    // error on stdout). Previously it returned success with empty output.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     setup_project(root);
@@ -184,8 +187,9 @@ fn refs_declaration_no_refs() {
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success());
-    assert!(stdout.trim().is_empty());
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout.contains("error:"));
+    assert!(stdout.contains("nonexistent"));
 }
 
 // -- Output formats --
@@ -254,4 +258,194 @@ fn refs_file_not_found() {
         .unwrap();
 
     assert!(!output.status.success());
+}
+
+// -- Multi-name refs --
+
+fn setup_multi_helper_project(root: &Path) {
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Lib/Utils.elm",
+        "module Lib.Utils exposing (helperA, helperB, helperC)\n\n\
+         helperA = 1\n\n\
+         helperB = 2\n\n\
+         helperC = 3\n",
+    );
+    write_elm(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\n\
+         import Lib.Utils\n\n\
+         a = Lib.Utils.helperA\n\n\
+         b = Lib.Utils.helperB\n\n\
+         c = Lib.Utils.helperC\n",
+    );
+}
+
+#[test]
+fn refs_multi_name_success() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    setup_multi_helper_project(root);
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["refs", "src/Lib/Utils.elm", "helperA", "helperB", "helperC"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+
+    let idx_a = stdout.find("## helperA").expect("## helperA present");
+    let idx_b = stdout.find("## helperB").expect("## helperB present");
+    let idx_c = stdout.find("## helperC").expect("## helperC present");
+    assert!(idx_a < idx_b, "helperA before helperB");
+    assert!(idx_b < idx_c, "helperB before helperC");
+
+    // Each block body should reference src/Main.elm. Split on the next `##`
+    // header to scope our search to the block.
+    for name in &["helperA", "helperB", "helperC"] {
+        let header = format!("## {name}");
+        let start = stdout.find(&header).unwrap() + header.len();
+        let rest = &stdout[start..];
+        let end = rest.find("\n## ").unwrap_or(rest.len());
+        let body = &rest[..end];
+        assert!(
+            body.contains("src/Main.elm:"),
+            "block for {name} missing src/Main.elm:\n{body}"
+        );
+    }
+}
+
+#[test]
+fn refs_multi_name_input_order_preserved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    setup_multi_helper_project(root);
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["refs", "src/Lib/Utils.elm", "helperC", "helperA", "helperB"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let idx_c = stdout.find("## helperC").expect("## helperC present");
+    let idx_a = stdout.find("## helperA").expect("## helperA present");
+    let idx_b = stdout.find("## helperB").expect("## helperB present");
+    assert!(idx_c < idx_a, "helperC before helperA");
+    assert!(idx_a < idx_b, "helperA before helperB");
+}
+
+#[test]
+fn refs_multi_name_partial_not_found() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    setup_multi_helper_project(root);
+
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "refs",
+            "src/Lib/Utils.elm",
+            "helperA",
+            "nonExistent",
+            "helperB",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(2), "stdout: {stdout}");
+
+    let idx_a = stdout.find("## helperA").expect("## helperA present");
+    let idx_n = stdout
+        .find("## nonExistent")
+        .expect("## nonExistent present");
+    let idx_b = stdout.find("## helperB").expect("## helperB present");
+    assert!(idx_a < idx_n && idx_n < idx_b, "input order preserved");
+
+    let block = |name: &str| -> String {
+        let header = format!("## {name}");
+        let start = stdout.find(&header).unwrap() + header.len();
+        let rest = &stdout[start..];
+        let end = rest.find("\n## ").unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+
+    let non_block = block("nonExistent");
+    assert!(
+        non_block.contains("error:"),
+        "nonExistent block missing 'error:': {non_block}"
+    );
+    assert!(
+        non_block.contains("not found"),
+        "nonExistent block missing 'not found': {non_block}"
+    );
+
+    let a_block = block("helperA");
+    assert!(
+        a_block.contains("src/Main.elm:"),
+        "helperA block missing src/Main.elm: {a_block}"
+    );
+    let b_block = block("helperB");
+    assert!(
+        b_block.contains("src/Main.elm:"),
+        "helperB block missing src/Main.elm: {b_block}"
+    );
+}
+
+#[test]
+fn refs_zero_names_module_level_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    setup_multi_helper_project(root);
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["refs", "src/Lib/Utils.elm"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        !stdout.contains("##"),
+        "zero-name output should be bare, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("src/Main.elm:"),
+        "expected importer in output, got: {stdout}"
+    );
+}
+
+#[test]
+fn refs_single_name_output_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    setup_multi_helper_project(root);
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["refs", "src/Lib/Utils.elm", "helperA"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        !stdout.contains("##"),
+        "single-name output should be bare, got: {stdout}"
+    );
 }
