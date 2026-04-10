@@ -62,7 +62,7 @@ $ elmq get src/Api.elm fetchData
 
 ### Command reference
 
-**Project-wide** — these handle the entire dependency graph atomically:
+**Project-wide** — these handle the entire dependency graph atomically. **Never manually patch a type definition to add/remove a variant** — use `variant add`/`variant rm`, which propagate through every case expression in the project:
 
 | Intent | Command |
 |---|---|
