@@ -1,19 +1,23 @@
 ### Requirement: Move declarations between modules
-The system SHALL provide a `move-decl` command that moves one or more declarations from a source Elm file to a target Elm file, updating all references project-wide so the code compiles after the operation.
+The system SHALL provide a `move-decl` command that moves one or more declarations from a source Elm file to a target Elm file, updating all references project-wide so the code compiles after the operation. Declaration names SHALL be passed as positional rest arguments after the source file and the `--to <target>` flag.
 
 #### Scenario: Basic function move
 - **GIVEN** `Source.elm` contains `helper : Int -> Int` and `Target.elm` exists
-- **WHEN** `elmq move-decl Source.elm --name helper --to Target.elm` is run
+- **WHEN** `elmq move-decl Source.elm --to Target.elm helper` is run
 - **THEN** `helper` (with type annotation and doc comment) SHALL be removed from `Source.elm`, inserted into `Target.elm`, and all project files referencing `Source.helper` SHALL be updated to reference `Target.helper`
 
 #### Scenario: Batch move
 - **GIVEN** `Source.elm` contains `funcA` and `funcB`
-- **WHEN** `elmq move-decl Source.elm --name funcA --name funcB --to Target.elm` is run
+- **WHEN** `elmq move-decl Source.elm --to Target.elm funcA funcB` is run
 - **THEN** both declarations SHALL be moved atomically
 
 #### Scenario: Dry run
 - **WHEN** `--dry-run` is passed
 - **THEN** no files SHALL be written, but the output SHALL report what would change
+
+#### Scenario: Old --name flag is rejected
+- **WHEN** `elmq move-decl Source.elm --name helper --to Target.elm` is run
+- **THEN** clap SHALL emit a usage error indicating `--name` is not a recognized flag and the process SHALL exit with status `1`
 
 ### Requirement: Import style rewriting
 When a moved declaration's body references modules that the target file imports differently than the source file, the declaration body SHALL be rewritten to match the target file's import conventions.
@@ -77,14 +81,14 @@ The system SHALL reject attempts to move individual type constructors.
 
 #### Scenario: Move a constructor
 - **GIVEN** `Source.elm` has `type Msg = Increment | Decrement`
-- **WHEN** `elmq move-decl Source.elm --name Increment --to Target.elm` is run
+- **WHEN** `elmq move-decl Source.elm --to Target.elm Increment` is run
 - **THEN** the system SHALL error with "Increment is a constructor of Msg; move Msg instead"
 
 ### Requirement: Target file creation
 When the target file does not exist, the system SHALL create it with the appropriate module declaration (derived from file path and project source-directories) and the necessary imports.
 
 #### Scenario: Move to new file
-- **WHEN** `elmq move-decl Source.elm --name helper --to src/Utils/Helpers.elm` is run and `src/Utils/Helpers.elm` does not exist
+- **WHEN** `elmq move-decl Source.elm --to src/Utils/Helpers.elm helper` is run and `src/Utils/Helpers.elm` does not exist
 - **THEN** `src/Utils/Helpers.elm` SHALL be created with `module Utils.Helpers exposing (helper)` and the moved declaration
 
 ### Requirement: Port module handling

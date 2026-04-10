@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 fn create_project(root: &Path, source_dirs: &[&str]) {
     let elm_json = format!(
@@ -488,4 +489,336 @@ fn dry_run_does_not_write() {
     // Files should be unchanged.
     assert_eq!(read_elm(root, "src/Source.elm"), original_source);
     assert_eq!(read_elm(root, "src/Target.elm"), original_target);
+}
+
+// -- CLI positional-name tests --
+
+fn elmq_bin() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_elmq"))
+}
+
+fn setup_cli_project(root: &Path) {
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Source.elm",
+        "module Source exposing (funcA, funcB)\n\n\nfuncA : Int -> Int\nfuncA x =\n    x + 1\n\n\nfuncB : Int -> Int\nfuncB x =\n    x + 2\n",
+    );
+    write_elm(root, "src/Target.elm", "module Target exposing (..)\n");
+}
+
+#[test]
+fn cli_move_decl_positional_names_success() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    setup_cli_project(root);
+
+    let output = elmq_bin()
+        .current_dir(root)
+        .args([
+            "move-decl",
+            "src/Source.elm",
+            "--to",
+            "src/Target.elm",
+            "funcA",
+            "funcB",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected success, got status {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let target = read_elm(root, "src/Target.elm");
+    assert!(target.contains("funcA"), "target missing funcA:\n{target}");
+    assert!(target.contains("funcB"), "target missing funcB:\n{target}");
+
+    let source = read_elm(root, "src/Source.elm");
+    assert!(
+        !source.contains("funcA x ="),
+        "source still contains funcA body:\n{source}"
+    );
+    assert!(
+        !source.contains("funcB x ="),
+        "source still contains funcB body:\n{source}"
+    );
+}
+
+#[test]
+fn cli_move_decl_positional_names_before_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    setup_cli_project(root);
+
+    let output = elmq_bin()
+        .current_dir(root)
+        .args([
+            "move-decl",
+            "src/Source.elm",
+            "funcA",
+            "funcB",
+            "--to",
+            "src/Target.elm",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected success with names before --to, got status {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let target = read_elm(root, "src/Target.elm");
+    assert!(target.contains("funcA"), "target missing funcA:\n{target}");
+    assert!(target.contains("funcB"), "target missing funcB:\n{target}");
+
+    let source = read_elm(root, "src/Source.elm");
+    assert!(!source.contains("funcA x ="));
+    assert!(!source.contains("funcB x ="));
+}
+
+#[test]
+fn cli_move_decl_rejects_old_name_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    setup_cli_project(root);
+
+    let original_source = read_elm(root, "src/Source.elm");
+
+    let output = elmq_bin()
+        .current_dir(root)
+        .args([
+            "move-decl",
+            "src/Source.elm",
+            "--name",
+            "funcA",
+            "--to",
+            "src/Target.elm",
+        ])
+        .output()
+        .unwrap();
+
+    // clap's default exit code for argparse/usage errors is 2.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected usage-error exit code 1 (spec reserves 1 for usage errors; clap's default 2 is overridden in main.rs)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unexpected argument") || stderr.contains("--name"),
+        "expected clap usage error mentioning --name, got stderr:\n{stderr}"
+    );
+
+    // Source file must be untouched.
+    assert_eq!(read_elm(root, "src/Source.elm"), original_source);
+}
+
+#[test]
+fn cli_move_decl_single_name_positional() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    setup_cli_project(root);
+
+    let output = elmq_bin()
+        .current_dir(root)
+        .args([
+            "move-decl",
+            "src/Source.elm",
+            "--to",
+            "src/Target.elm",
+            "funcA",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected success, got status {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let target = read_elm(root, "src/Target.elm");
+    assert!(target.contains("funcA"), "target missing funcA:\n{target}");
+
+    let source = read_elm(root, "src/Source.elm");
+    assert!(
+        !source.contains("funcA x ="),
+        "source still contains funcA body:\n{source}"
+    );
+    // funcB should remain in source.
+    assert!(
+        source.contains("funcB x ="),
+        "funcB should remain in source:\n{source}"
+    );
+}
+
+// -- Bug fix: moved items exposed in target only when referenced externally --
+
+#[test]
+fn unexposed_decl_is_exposed_in_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+
+    // helper is NOT in the exposing list of Source
+    write_elm(
+        root,
+        "src/Source.elm",
+        "module Source exposing (main)\n\n\nmain =\n    helper 1\n\n\nhelper x =\n    x + 1\n",
+    );
+    write_elm(
+        root,
+        "src/Target.elm",
+        "module Target exposing (other)\n\n\nother =\n    42\n",
+    );
+
+    run_move(root, "src/Source.elm", &["helper"], "src/Target.elm", false).unwrap();
+
+    let target = read_elm(root, "src/Target.elm");
+    // helper must be exposed in Target so other modules can import it
+    assert!(
+        target.contains("helper") && {
+            // Check the module declaration exposes helper
+            let first_line = target.lines().next().unwrap_or("");
+            first_line.contains("helper")
+        },
+        "expected helper to be exposed in target module declaration, got:\n{target}"
+    );
+}
+
+#[test]
+fn unexposed_decl_exposed_in_new_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+
+    // helper is NOT exposed
+    write_elm(
+        root,
+        "src/Source.elm",
+        "module Source exposing (main)\n\n\nmain =\n    helper 1\n\n\nhelper x =\n    x + 1\n",
+    );
+
+    run_move(
+        root,
+        "src/Source.elm",
+        &["helper"],
+        "src/NewTarget.elm",
+        false,
+    )
+    .unwrap();
+
+    let target = read_elm(root, "src/NewTarget.elm");
+    let first_line = target.lines().next().unwrap_or("");
+    assert!(
+        first_line.contains("helper"),
+        "expected helper in new target exposing list, got:\n{target}"
+    );
+}
+
+// -- Bug fix: source imports target when it still references moved decls --
+
+#[test]
+fn source_imports_target_for_moved_references() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+
+    // main references helper, but we move helper out. main stays, so source needs
+    // an import for Target to resolve the bare `helper` reference.
+    write_elm(
+        root,
+        "src/Source.elm",
+        "module Source exposing (main)\n\n\nmain =\n    helper 1\n\n\nhelper x =\n    x + 1\n",
+    );
+    write_elm(
+        root,
+        "src/Target.elm",
+        "module Target exposing (..)\n\n\nother =\n    42\n",
+    );
+
+    run_move(root, "src/Source.elm", &["helper"], "src/Target.elm", false).unwrap();
+
+    let source = read_elm(root, "src/Source.elm");
+    assert!(
+        source.contains("import Target"),
+        "expected source to import Target after moving helper out, got:\n{source}"
+    );
+    assert!(
+        source.contains("helper"),
+        "expected source to still reference helper, got:\n{source}"
+    );
+}
+
+#[test]
+fn source_no_import_when_no_remaining_refs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+
+    // main does NOT reference helper, so after moving helper there should be
+    // no import for Target added to Source.
+    write_elm(
+        root,
+        "src/Source.elm",
+        "module Source exposing (main, helper)\n\n\nmain =\n    42\n\n\nhelper x =\n    x + 1\n",
+    );
+    write_elm(
+        root,
+        "src/Target.elm",
+        "module Target exposing (..)\n\n\nother =\n    0\n",
+    );
+
+    run_move(root, "src/Source.elm", &["helper"], "src/Target.elm", false).unwrap();
+
+    let source = read_elm(root, "src/Source.elm");
+    assert!(
+        !source.contains("import Target"),
+        "expected no Target import when source doesn't reference moved decl, got:\n{source}"
+    );
+}
+
+#[test]
+fn unreferenced_decl_not_exposed_in_new_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+
+    // helper is NOT referenced by main (or any other file), so it should
+    // stay behind exposing (..) in the new target — not explicitly exposed.
+    write_elm(
+        root,
+        "src/Source.elm",
+        "module Source exposing (main, helper)\n\n\nmain =\n    42\n\n\nhelper x =\n    x + 1\n",
+    );
+
+    run_move(
+        root,
+        "src/Source.elm",
+        &["helper"],
+        "src/NewTarget.elm",
+        false,
+    )
+    .unwrap();
+
+    let target = read_elm(root, "src/NewTarget.elm");
+    let first_line = target.lines().next().unwrap_or("");
+    assert!(
+        first_line.contains("(..)"),
+        "expected exposing (..) for unreferenced decl, got:\n{target}"
+    );
 }

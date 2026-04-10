@@ -73,13 +73,6 @@ pub fn execute_move_declaration(
     let project = Project::discover(source_file)?;
     let source_module = project.module_name(source_file)?;
 
-    // Determine which moved declarations were exposed from the source module.
-    let exposed_names: HashSet<String> = move_set
-        .iter()
-        .filter(|name| is_declaration_exposed(&source_tree, &source_text, name))
-        .cloned()
-        .collect();
-
     // Parse or create target file.
     let target_exists = target_file.is_file();
     let (target_text, target_tree, target_module) = if target_exists {
@@ -224,13 +217,12 @@ pub fn execute_move_declaration(
         copied_decls.push((name.clone(), rewritten));
     }
 
-    // Build the new target file content.
-    let new_target_text = if target_exists {
+    // Build the new target file content (declarations inserted but not yet exposed).
+    let mut new_target_text = if target_exists {
         build_updated_target(
             &target_text,
             &rewritten_decls,
             &copied_decls,
-            &exposed_names,
             &new_target_ctx,
             has_ports,
         )?
@@ -239,7 +231,6 @@ pub fn execute_move_declaration(
             &target_module,
             &rewritten_decls,
             &copied_decls,
-            &exposed_names,
             &new_target_ctx,
             has_ports,
         )
@@ -247,7 +238,41 @@ pub fn execute_move_declaration(
 
     // Build new source file content: remove moved declarations, update exposing list.
     let decls_to_remove: HashSet<&str> = move_set.iter().map(|s| s.as_str()).collect();
-    let new_source_text = build_updated_source(&source_text, &source_summary, &decls_to_remove)?;
+    let mut new_source_text =
+        build_updated_source(&source_text, &source_summary, &decls_to_remove)?;
+
+    // Collect the set of moved names that are referenced externally (by the remaining
+    // source or by other project files). Only these need to be exposed in the target.
+    let mut externally_needed: HashSet<String> = HashSet::new();
+
+    // Check if the remaining source references any moved declarations.
+    {
+        let src_tree = parser::parse(&new_source_text)?;
+        let src_summary = parser::extract_summary(&src_tree, &new_source_text);
+        let remaining_decl_names: HashSet<String> = src_summary
+            .declarations
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+
+        for decl in &src_summary.declarations {
+            let lines: Vec<&str> = new_source_text.lines().collect();
+            let start = decl.start_line - 1;
+            let end = decl.end_line.min(lines.len());
+            let decl_text = lines[start..end].join("\n");
+            let decl_tree = match parser::parse(&decl_text) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let mut refs = HashSet::new();
+            collect_local_refs(&decl_tree.root_node(), &decl_text, &mut refs);
+            for r in refs {
+                if move_set.contains(&r) && !remaining_decl_names.contains(&r) {
+                    externally_needed.insert(r);
+                }
+            }
+        }
+    }
 
     // Scan project for files that reference moved declarations and rewrite them.
     let elm_files = project.elm_files()?;
@@ -300,9 +325,103 @@ pub fn execute_move_declaration(
             rewrite_importing_file(&file_source, &source_module, &target_module, &move_set);
 
         if updated != file_source {
+            // Track which moved names this file actually uses — they need to be exposed.
+            for item in &source_import.exposed {
+                if move_set.contains(item.name()) {
+                    externally_needed.insert(item.name().to_string());
+                }
+            }
+            // Also check for qualified references.
+            let mut qualified_refs = HashSet::new();
+            let mut _has_qualified = false;
+            collect_qualified_moved_refs(
+                &file_root,
+                &file_source,
+                &source_module,
+                source_import,
+                &move_set,
+                &mut qualified_refs,
+                &mut _has_qualified,
+            );
+            externally_needed.extend(qualified_refs);
+
             let display = display_path(elm_file.strip_prefix(&project.root).unwrap_or(elm_file));
             updated_files.push(display);
             file_updates.push((elm_file.clone(), updated));
+        }
+    }
+
+    // Expose only moved declarations that are actually referenced externally.
+    // For new targets (exposing (..)), rewrite the module line with an explicit list.
+    // For existing targets, use writer::expose() which appends to the existing list.
+    {
+        let needed_moved: Vec<String> = externally_needed
+            .iter()
+            .filter(|n| move_set.contains(n.as_str()))
+            .cloned()
+            .collect();
+
+        let module_decl = writer::find_module_declaration(&new_target_text)?;
+        let exposing_content = writer::extract_exposing_content(&module_decl)?;
+
+        if exposing_content.trim() == ".." {
+            // New target file — replace (..) with explicit list of needed names.
+            if !needed_moved.is_empty() {
+                let mut items: Vec<&str> = needed_moved.iter().map(|s| s.as_str()).collect();
+                items.sort();
+                let new_exposing = format!("({})", items.join(", "));
+                let old_exposing = format!("({})", exposing_content);
+                new_target_text = new_target_text.replacen(&old_exposing, &new_exposing, 1);
+            }
+            // If nothing is needed, leave (..) — Elm requires at least exposing something.
+        } else {
+            // Existing target — add each needed name via expose().
+            for name in &needed_moved {
+                let tree = parser::parse(&new_target_text)?;
+                let summary = parser::extract_summary(&tree, &new_target_text);
+                new_target_text = writer::expose(&new_target_text, &summary, name)?;
+            }
+        }
+    }
+
+    // Add import to source only for moved names it actually references.
+    {
+        // Re-scan source since externally_needed now includes project-wide refs too;
+        // we only want the subset the source itself uses.
+        let src_tree = parser::parse(&new_source_text)?;
+        let src_summary = parser::extract_summary(&src_tree, &new_source_text);
+        let remaining_decl_names: HashSet<String> = src_summary
+            .declarations
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+
+        let mut source_needs: HashSet<String> = HashSet::new();
+        for decl in &src_summary.declarations {
+            let lines: Vec<&str> = new_source_text.lines().collect();
+            let start = decl.start_line - 1;
+            let end = decl.end_line.min(lines.len());
+            let decl_text = lines[start..end].join("\n");
+            let decl_tree = match parser::parse(&decl_text) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let mut refs = HashSet::new();
+            collect_local_refs(&decl_tree.root_node(), &decl_text, &mut refs);
+            for r in refs {
+                if move_set.contains(&r) && !remaining_decl_names.contains(&r) {
+                    source_needs.insert(r);
+                }
+            }
+        }
+
+        if !source_needs.is_empty() {
+            let mut items: Vec<&str> = source_needs.iter().map(|s| s.as_str()).collect();
+            items.sort();
+            let import_line = format!("import {target_module} exposing ({})", items.join(", "));
+            let tree = parser::parse(&new_source_text)?;
+            let summary = parser::extract_summary(&tree, &new_source_text);
+            new_source_text = writer::add_import(&new_source_text, &summary, &import_line);
         }
     }
 
@@ -694,26 +813,12 @@ fn build_new_target(
     module_name: &str,
     moved_decls: &[(String, String)],
     copied_decls: &[(String, String)],
-    exposed_names: &HashSet<String>,
     target_ctx: &ImportContext,
     has_ports: bool,
 ) -> String {
     let prefix = if has_ports { "port module" } else { "module" };
 
-    // Exposing list: only expose declarations that were exposed in source.
-    let expose_list: Vec<&str> = moved_decls
-        .iter()
-        .filter(|(name, _)| exposed_names.contains(name))
-        .map(|(name, _)| name.as_str())
-        .collect();
-
-    let exposing = if expose_list.is_empty() {
-        "(..)".to_string()
-    } else {
-        format!("({})", expose_list.join(", "))
-    };
-
-    let mut result = format!("{prefix} {module_name} exposing {exposing}\n");
+    let mut result = format!("{prefix} {module_name} exposing (..)\n");
 
     let imports = target_ctx.render_imports();
     if !imports.is_empty() {
@@ -741,7 +846,6 @@ fn build_updated_target(
     target_text: &str,
     moved_decls: &[(String, String)],
     copied_decls: &[(String, String)],
-    exposed_names: &HashSet<String>,
     target_ctx: &ImportContext,
     has_ports: bool,
 ) -> Result<String> {
@@ -793,14 +897,7 @@ fn build_updated_target(
         result = writer::upsert_declaration(&result, &summary, name, decl_source);
     }
 
-    // Update exposing list.
-    for (name, _) in moved_decls {
-        if exposed_names.contains(name) {
-            let tree = parser::parse(&result)?;
-            let summary = parser::extract_summary(&tree, &result);
-            result = writer::expose(&result, &summary, name)?;
-        }
-    }
+    // Exposing is handled by the caller after scanning which names are externally referenced.
 
     // Upgrade to port module if needed.
     if has_ports && !result.starts_with("port module") {

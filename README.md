@@ -35,7 +35,7 @@ elmq list src/Main.elm
 ```
 
 ```
-module Main exposing (Model, Msg(..), update, view)
+module Main exposing (Model, Msg(..), update, view)  (38 lines)
 
 imports:
   Html exposing (Html, div, text)
@@ -91,6 +91,14 @@ update msg model =
 ```
 
 Includes doc comments and type annotations when present. Returns non-zero exit code if the declaration is not found.
+
+Read across multiple files in one call with `-f`:
+
+```sh
+elmq get -f src/Page/Home.elm update view -f src/Update.elm main
+```
+
+Each `-f` group is a file followed by one or more names. Output is framed as `## Module.decl` blocks (falls back to `## file:decl` without `elm.json`).
 
 ### Upsert a declaration
 
@@ -210,7 +218,7 @@ Renames a declaration (or type constructor) and updates all references across th
 ### Move declarations between modules
 
 ```sh
-elmq move-decl src/Page/Home.elm --name viewHeader --name viewFooter --to src/Shared/Layout.elm
+elmq move-decl src/Page/Home.elm --to src/Shared/Layout.elm viewHeader viewFooter
 ```
 
 ```
@@ -241,6 +249,40 @@ added SetName to Msg in src/Types.elm
 
 Appends a constructor to a custom type and inserts `Debug.todo` branches in all matching case expressions project-wide. Case expressions with wildcard (`_`) branches are skipped with an info message.
 
+To fill branch bodies in the same call, first survey the sites with `elmq variant cases`, then pass their keys to `--fill`:
+
+```sh
+elmq variant cases src/Types.elm --type Msg
+```
+
+```
+## case sites for type Types.Msg (2 files, 2 functions)
+
+### src/Update.elm
+
+#### update (key: update, line 12)
+update : Msg -> Model -> Model
+update msg model =
+    case msg of
+        Increment -> ...
+        Decrement -> ...
+
+### src/View.elm
+
+#### label (key: label, line 8)
+...
+```
+
+```sh
+elmq variant add src/Types.elm --type Msg "Reset" \
+  --fill 'update=Reset -> { model | count = 0 }' \
+  --fill 'label=Reset -> "reset"'
+```
+
+`variant cases` is read-only and returns every case expression project-wide that matches the target type, with its enclosing function body (including type annotation) and a stable site key. Pass those keys to `--fill <key>=<branch_text>` (repeatable) on `variant add` to replace the default `Debug.todo "<Variant>"` stub with real branch bodies in the same call. Unmatched fill keys fail validation before any file is touched; unfilled sites fall back to `Debug.todo` stubs (graceful degradation).
+
+When one function contains multiple case expressions on the same type, or two files both define a function with the same name, `variant cases` disambiguates with `function#N` or `file:function` keys. Passing an ambiguous bare key to `--fill` errors with the valid alternatives listed.
+
 ```sh
 elmq variant rm src/Types.elm --type Msg Decrement
 ```
@@ -252,6 +294,39 @@ removed Decrement from Msg in src/Types.elm
 ```
 
 Removes a constructor and its matching branches from all case expressions. Errors if removing the last variant (use `elmq rm` instead). Use `--dry-run` to preview changes.
+
+### Search Elm sources
+
+```sh
+elmq grep "Http\.get"
+```
+
+```
+src/Api.elm:42:fetchUser:    Http.get { url = userUrl, expect = Http.expectJson GotUser decoder }
+src/Page/Home.elm:88:init:    Http.get { url = feedUrl, expect = Http.expectJson GotFeed feedDecoder }
+```
+
+Regex search over Elm files (Rust `regex` dialect, same as ripgrep) that annotates each hit with its **enclosing top-level declaration** — the discovery entry point that feeds into `elmq get`. Use `-F` for literal matching and `-i` for case-insensitive. Matches inside `--` / `{- -}` comments and string literals are filtered by default; pass `--include-comments` or `--include-strings` to opt back in independently.
+
+Project discovery walks up for `elm.json` and honors its `source-directories`; if no `elm.json` is found, falls back to recursively walking the CWD. Both paths honor `.gitignore`. Exit codes match ripgrep: `0` on matches, `1` on none, `2` on error.
+
+Two additional flags enable one-call definition lookup and source retrieval:
+
+- `--definitions` — only emit matches at the declaration name site (filters out call sites)
+- `--source` — emit full declaration source for each matched decl, deduped by `(file, decl)`. Output is framed `## Module.decl` (single result stays bare).
+
+Combine them for definition lookup: `elmq grep --definitions --source 'update'` returns the full source of the `update` declaration without any call-site noise.
+
+Pipe into `elmq get` for a find-then-retrieve workflow:
+
+```sh
+elmq grep --format json "Http\.get" \
+  | jq -r 'select(.decl) | "\(.file) \(.decl)"' \
+  | sort -u \
+  | while read file decl; do elmq get "$file" "$decl"; done
+```
+
+Matches that land outside any top-level declaration (imports, module header) report `decl: null` in JSON and an empty decl slot in compact output.
 
 ### JSON output
 

@@ -113,3 +113,112 @@ Both `variant add` and `variant rm` SHALL return structured results including th
 
 ### Requirement: Atomic writes
 All file modifications SHALL be collected before any writes occur. If any transformation fails, no files SHALL be modified.
+
+
+### Requirement: Inspect case sites for a type
+The system SHALL provide a read-only `elmq variant cases` command that walks the project for every case expression matching a given custom type and emits each site with its enclosing function body and a stable site key. The command SHALL NOT modify any files.
+
+#### Scenario: List case sites in one file
+- **GIVEN** `src/Page/Home.elm` defines `type FeedTab = YourFeed Cred | GlobalFeed | TagFeed String` and has two functions (`viewTabs`, `fetchFeed`) that each contain one case expression matching `FeedTab`
+- **WHEN** `elmq variant cases src/Page/Home.elm --type FeedTab` is run
+- **THEN** the output SHALL list both sites, each with its file, function name, line, key, and the full enclosing function body (signature and implementation)
+
+#### Scenario: List case sites across multiple files
+- **GIVEN** `src/Types.elm` defines `type Msg` and three other files (`src/Main.elm`, `src/Page.elm`, `src/Update.elm`) each contain one case expression matching `Msg`
+- **WHEN** `elmq variant cases src/Types.elm --type Msg` is run
+- **THEN** the output SHALL list all three sites grouped by file, each with its computed key and enclosing function body
+
+#### Scenario: Wildcard-covered sites appear in skipped list
+- **GIVEN** a case expression has a `_ -> ...` catch-all branch
+- **WHEN** `elmq variant cases` is run on the enclosing type
+- **THEN** the site SHALL appear in a `skipped` section with reason `wildcard branch covers type` and SHALL NOT appear in the active sites list
+
+#### Scenario: JSON output format
+- **WHEN** `--format json` is passed
+- **THEN** the output SHALL be a JSON object with `type`, `type_file`, `sites` (array of `{ file, function, key, line, body }` objects), and `skipped` (array of `{ file, function, line, reason }` objects)
+
+#### Scenario: No case sites found
+- **WHEN** no file in the project contains a case expression matching the given type
+- **THEN** the command SHALL exit successfully with an empty `sites` array (JSON) or a `no case sites found for type <TypeName>` message (compact)
+
+#### Scenario: Type not found
+- **WHEN** the type name does not exist in the given file
+- **THEN** the command SHALL error with `type <TypeName> not found in <file>` and exit non-zero
+
+### Requirement: Stable site keys with progressive qualification
+The system SHALL compute a unique key for each case site returned by `variant cases`, using the shortest form that is unambiguous across the result set. Keys SHALL be usable verbatim as identifiers in `variant add --fill`.
+
+Key grammar, in order of precedence (shortest wins):
+1. `<function>` — bare function name.
+2. `<function>#<N>` — function plus 1-indexed ordinal, source-ordered, scoped to `(file, function, type)`.
+3. `<file>:<function>` — file-qualified.
+4. `<file>:<function>#<N>` — both qualifiers.
+
+#### Scenario: Bare function key when unambiguous
+- **GIVEN** the project has exactly one function named `viewTabs` containing a case expression on the target type
+- **WHEN** `variant cases` computes keys
+- **THEN** the site's key SHALL be `viewTabs`
+
+#### Scenario: Ordinal disambiguation within one function
+- **GIVEN** function `update` in `src/Main.elm` contains two distinct case expressions, both matching the target type
+- **WHEN** `variant cases` computes keys
+- **THEN** the first case (lower byte offset) SHALL have key `update#1` and the second SHALL have key `update#2`
+
+#### Scenario: File qualification across files
+- **GIVEN** `src/Main.elm` and `src/Page.elm` each contain a function named `update` with one case expression on the target type
+- **WHEN** `variant cases` computes keys
+- **THEN** the sites SHALL have keys `src/Main.elm:update` and `src/Page.elm:update` respectively
+
+#### Scenario: Full qualification
+- **GIVEN** the same function name appears in two files AND one of those files has two cases in that function
+- **WHEN** `variant cases` computes keys
+- **THEN** the two-case file's sites SHALL have keys like `src/Main.elm:update#1` and `src/Main.elm:update#2`, and the single-case file's site SHALL have key `src/Page.elm:update`
+
+#### Scenario: Keys match between cases and add --fill
+- **GIVEN** `variant cases --type Msg src/Types.elm` emits a site with key `view`
+- **WHEN** the same project state is passed to `variant add src/Types.elm --type Msg 'Reset' --fill view='Reset -> text "reset"'`
+- **THEN** the fill SHALL be applied at the site that `cases` reported
+
+### Requirement: Fill branch bodies when adding a variant
+The system SHALL accept a repeatable `--fill <key>=<body>` flag on `variant add` that replaces the default `Debug.todo "<VariantName>"` branch with the provided body text at the matching site. Unmatched sites SHALL receive the default `Debug.todo` stub (graceful degradation).
+
+#### Scenario: Single fill replaces Debug.todo stub
+- **GIVEN** `variant cases` has reported one site with key `view` on type `Msg`
+- **WHEN** `elmq variant add src/Types.elm --type Msg 'Reset' --fill 'view=Reset -> text "reset"'` is run
+- **THEN** the `view` function's case expression SHALL gain the branch `Reset -> text "reset"` (instead of `Reset -> Debug.todo "Reset"`), and the type declaration SHALL gain the `| Reset` variant
+
+#### Scenario: Multiple fills applied in one invocation
+- **GIVEN** `variant cases` has reported three sites with keys `update`, `view`, `subscriptions`
+- **WHEN** `variant add` is run with three `--fill` flags covering all three keys
+- **THEN** each site SHALL receive its corresponding filled body and no `Debug.todo` stubs SHALL be emitted
+
+#### Scenario: Partial fills degrade to Debug.todo for unfilled sites
+- **GIVEN** `variant cases` has reported three sites with keys `update`, `view`, `subscriptions`
+- **WHEN** `variant add` is run with `--fill` only for `view`
+- **THEN** the `view` site SHALL receive its filled body, and the `update` and `subscriptions` sites SHALL receive `Debug.todo "<VariantName>"` stubs as if no `--fill` had been passed
+
+#### Scenario: Fill body split on first equals
+- **WHEN** the fill argument is `'update=UpdateMsg x -> ( { model | counter = x }, Cmd.none )'` (body contains multiple `=` characters)
+- **THEN** the key SHALL be `update` and the body SHALL be the entire text after the first `=`, preserving all remaining `=` characters
+
+#### Scenario: Fill key matches an unused site key
+- **WHEN** the user passes `--fill nosuchfunction=...` and no site has that key
+- **THEN** the system SHALL error with `no case site matched fill key: nosuchfunction` and list the valid site keys for the current invocation, exiting non-zero without writing any files
+
+#### Scenario: Ambiguous bare fill key
+- **GIVEN** function `update` has two case expressions on the target type, so its sites have keys `update#1` and `update#2`
+- **WHEN** the user passes `--fill update=...` (bare, ambiguous)
+- **THEN** the system SHALL error with a message listing the disambiguated keys (`update#1`, `update#2`) the user should use, and SHALL NOT write any files
+
+#### Scenario: Fill applied via tuple pattern case
+- **GIVEN** a case expression matches on `( msg, model )` (tuple pattern) and the target type appears in one tuple position
+- **WHEN** a fill body is provided keyed to that site
+- **THEN** the inserted branch SHALL use the tuple pattern shape (same as when `Debug.todo` would have been inserted) and the fill body SHALL be placed in the branch's body position
+
+#### Scenario: Dry run with fills
+- **WHEN** `variant add --fill <key>=<body> --dry-run` is run
+- **THEN** no files SHALL be written, but the reported preview SHALL reflect the filled body at the matching site rather than `Debug.todo`
+
+#### Scenario: Backward compatibility without --fill
+- **WHEN** `variant add` is run without any `--fill` flags
+- **THEN** the behavior SHALL be identical to the pre-change `variant add`: every matching case expression receives `Debug.todo "<VariantName>"`

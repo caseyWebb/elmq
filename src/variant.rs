@@ -4,7 +4,7 @@ use crate::project::Project;
 use crate::writer;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use tree_sitter::Node;
 
@@ -35,6 +35,30 @@ pub struct CaseSkip {
     pub function: String,
     pub line: usize,
     pub reason: String,
+}
+
+/// Result of `elmq variant cases` — a read-only report of every case expression in
+/// the project that matches on the target type, with enough context (enclosing
+/// function body, stable key) for a caller to compose `variant add --fill`.
+#[derive(Debug, Clone, Serialize)]
+pub struct CasesResult {
+    #[serde(rename = "type")]
+    pub type_name: String,
+    pub type_file: String,
+    pub sites: Vec<CasesSite>,
+    pub skipped: Vec<CaseSkip>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CasesSite {
+    pub file: String,
+    pub module: String,
+    pub function: String,
+    pub key: String,
+    pub line: usize,
+    /// Full source text of the enclosing top-level declaration, including any
+    /// preceding type annotation. Captured verbatim from the file at walk time.
+    pub body: String,
 }
 
 // -- Constructor map --
@@ -164,7 +188,9 @@ fn parse_variant_definition(definition: &str) -> Result<(String, usize)> {
 
 // -- Case expression analysis --
 
-/// Info about a case expression that matches the target type.
+/// Info about a case expression that matches the target type. Used only by
+/// `execute_rm_variant` — the add flow now routes through `CaseSite`, which carries
+/// a superset of the information.
 struct CaseExprInfo {
     /// Byte range of the entire case_of_expr node
     byte_range: std::ops::Range<usize>,
@@ -174,13 +200,6 @@ struct CaseExprInfo {
     function: String,
     /// Whether the case has a wildcard/catch-all branch
     has_wildcard: bool,
-    /// Indentation (in spaces) used for branches
-    branch_indent: usize,
-    /// Indentation (in spaces) used for branch bodies
-    body_indent: usize,
-    /// For nested patterns (tuples): the position of the constructor within the tuple, if any.
-    /// None means the constructor is the direct pattern.
-    tuple_position: Option<TuplePatternInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +214,38 @@ struct TuplePatternInfo {
 struct MatchingBranch {
     /// Byte range of the entire case_of_branch
     byte_range: std::ops::Range<usize>,
+}
+
+/// A case expression matching the target type, captured with all context needed by
+/// both `execute_cases` (for read-only reporting) and `execute_add_variant` (for
+/// branch insertion). Produced by `collect_case_sites`.
+#[derive(Debug, Clone)]
+struct CaseSite {
+    /// Canonical path to the file containing the case expression.
+    file: PathBuf,
+    /// Module name (e.g. "Page.Home") of the containing file.
+    module: String,
+    /// Relative display path (e.g. "src/Page/Home.elm").
+    display: String,
+    /// Name of the top-level function enclosing the case expression.
+    function: String,
+    /// 1-based line number of the case_of_expr.
+    line: usize,
+    /// Byte range of the case_of_expr in the source used for the walk.
+    byte_range: std::ops::Range<usize>,
+    /// Whether any branch of the case has a wildcard / catch-all pattern.
+    has_wildcard: bool,
+    /// Leading-space indent that new branches should use.
+    branch_indent: usize,
+    /// Leading-space indent that new branch bodies should use.
+    body_indent: usize,
+    /// Tuple-position info when the case matches on a tuple pattern and the target
+    /// type appears in one position.
+    tuple_position: Option<TuplePatternInfo>,
+    /// Byte range of the enclosing top-level declaration, including any preceding
+    /// type annotation. Used by `execute_cases` to slice the enclosing function body
+    /// as context for the caller.
+    declaration_byte_range: std::ops::Range<usize>,
 }
 
 /// Shared context for type resolution during case expression analysis.
@@ -446,6 +497,268 @@ fn find_matching_case_exprs(
     results
 }
 
+/// Walk from `node` up to the nearest **top-level** declaration (a direct child of
+/// the root file node). Returns `None` if the node is not inside a top-level
+/// `value_declaration`. Elm type annotations live as siblings of their paired
+/// value_declaration at the root level, so "top-level" is what lets us also locate
+/// the preceding type annotation.
+fn find_top_level_declaration<'a>(node: &Node<'a>, root: &Node<'a>) -> Option<Node<'a>> {
+    let mut current = *node;
+    while let Some(parent) = current.parent() {
+        if parent.id() == root.id() {
+            if current.kind() == "value_declaration" {
+                return Some(current);
+            }
+            return None;
+        }
+        current = parent;
+    }
+    None
+}
+
+/// Return the byte range covering the top-level declaration **plus** its preceding
+/// type annotation (if any), so a slice of the source over this range yields the
+/// full `name : type` + `name args = body` block that a user would expect to read.
+/// Also returns the function name as declared in the value_declaration.
+fn declaration_range_with_annotation<'a>(
+    decl: &Node<'a>,
+    root: &Node<'a>,
+    source: &str,
+) -> (String, std::ops::Range<usize>) {
+    // Extract the function name from the declaration's functionDeclarationLeft.
+    let name = decl
+        .child_by_field_name("functionDeclarationLeft")
+        .and_then(|fdl| fdl.named_child(0))
+        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "<unknown>".to_string());
+
+    let mut start_byte = decl.start_byte();
+    let end_byte = decl.end_byte();
+
+    // Scan root's named children for the sibling immediately preceding `decl`. If it
+    // is a type_annotation naming the same function, extend the start to cover it.
+    let mut cursor = root.walk();
+    let mut prev: Option<Node> = None;
+    for child in root.named_children(&mut cursor) {
+        if child.id() == decl.id() {
+            if let Some(p) = prev
+                && p.kind() == "type_annotation"
+                && let Some(name_node) = p.child_by_field_name("name")
+                && let Ok(ann_name) = name_node.utf8_text(source.as_bytes())
+                && ann_name == name
+            {
+                start_byte = p.start_byte();
+            }
+            break;
+        }
+        prev = Some(child);
+    }
+
+    (name, start_byte..end_byte)
+}
+
+/// Walk the project and collect every case expression matching the target type.
+///
+/// Shared by `execute_cases` (read-only) and `execute_add_variant` (which then runs
+/// its own insertion loop over the returned sites). Accepts optional `source_overrides`
+/// so `execute_add_variant` can swap in the type file's post-append source without
+/// writing to disk first.
+fn collect_case_sites(
+    project: &Project,
+    elm_files: &[PathBuf],
+    target_module: &str,
+    target_type: &str,
+    constructor_map: &HashMap<String, TypeInfo>,
+    source_overrides: &HashMap<PathBuf, String>,
+) -> Result<Vec<CaseSite>> {
+    let mut sites = Vec::new();
+
+    for elm_file in elm_files {
+        let file_source = if let Some(over) = source_overrides.get(elm_file) {
+            over.clone()
+        } else {
+            match std::fs::read_to_string(elm_file) {
+                Ok(s) => s,
+                Err(_) => continue,
+            }
+        };
+
+        let file_tree = match parser::parse(&file_source) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        let root = file_tree.root_node();
+        let import_ctx = ImportContext::from_tree(&root, &file_source);
+        let module_name = match project.module_name(elm_file) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let display = relative_display(elm_file, &project.root);
+        let type_ctx = TypeContext {
+            target_module,
+            target_type,
+            constructor_map,
+            current_module: &module_name,
+        };
+
+        // Walk the tree and collect sites inline — we have each Node available, so
+        // we can resolve the enclosing top-level declaration without a second scan.
+        collect_case_sites_in_tree(
+            &root,
+            &file_source,
+            &type_ctx,
+            &import_ctx,
+            elm_file,
+            &module_name,
+            &display,
+            &mut sites,
+        );
+    }
+
+    Ok(sites)
+}
+
+/// Recursive walker used by `collect_case_sites`: for each matching case_of_expr,
+/// compute its enclosing top-level declaration (name + byte range with annotation)
+/// and push a `CaseSite` onto `out`. Operates in a single tree pass per file.
+#[allow(clippy::too_many_arguments)]
+fn collect_case_sites_in_tree(
+    node: &Node,
+    source: &str,
+    ctx: &TypeContext,
+    import_ctx: &ImportContext,
+    file: &Path,
+    module: &str,
+    display: &str,
+    out: &mut Vec<CaseSite>,
+) {
+    if node.kind() == "case_of_expr" {
+        // Re-check that this case matches on the target type (same predicate as
+        // `collect_case_exprs` uses). Avoid pulling in CaseExprInfo just to reuse it.
+        let mut cursor = node.walk();
+        let mut matches = false;
+        for child in node.named_children(&mut cursor) {
+            if child.kind() != "case_of_branch" {
+                continue;
+            }
+            if let Some(pattern) = child.child_by_field_name("pattern")
+                && find_constructor_in_pattern(&pattern, source, ctx, import_ctx).is_some()
+            {
+                matches = true;
+                break;
+            }
+        }
+
+        if matches {
+            let has_wildcard = has_wildcard_branch(node, source);
+            let (branch_indent, body_indent) = get_branch_indentation(node, source);
+            let tuple_position = detect_tuple_position(node, source, ctx, import_ctx);
+
+            // Walk up to the top-level declaration for a stable function name and
+            // a body range that covers `sig + impl`. If the case expression isn't
+            // inside a top-level declaration (rare: module-level weirdness), fall
+            // back to the innermost-declaration name and an empty body range.
+            let root = top_most_ancestor(node);
+            let (function_name, declaration_byte_range) =
+                match find_top_level_declaration(node, &root) {
+                    Some(decl) => declaration_range_with_annotation(&decl, &root, source),
+                    None => (find_enclosing_function(node, source), 0..0),
+                };
+
+            out.push(CaseSite {
+                file: file.to_path_buf(),
+                module: module.to_string(),
+                display: display.to_string(),
+                function: function_name,
+                line: node.start_position().row + 1,
+                byte_range: node.byte_range(),
+                has_wildcard,
+                branch_indent,
+                body_indent,
+                tuple_position,
+                declaration_byte_range,
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_case_sites_in_tree(&child, source, ctx, import_ctx, file, module, display, out);
+    }
+}
+
+/// Walk to the outermost ancestor of a node (its tree's root). Needed because the
+/// recursive walker in `collect_case_sites_in_tree` receives nodes without a direct
+/// root reference and must locate root on demand for top-level declaration lookup.
+fn top_most_ancestor<'a>(node: &Node<'a>) -> Node<'a> {
+    let mut current = *node;
+    while let Some(p) = current.parent() {
+        current = p;
+    }
+    current
+}
+
+/// Compute the shortest unambiguous key for every site in `sites`, per the progressive
+/// qualification scheme in `openspec/changes/variant-fill/design.md` §3/§8:
+///
+/// 1. `<function>` when there is exactly one site for this function name project-wide.
+/// 2. `<function>#<N>` when multiple sites share the same function name, all in one file.
+/// 3. `<file>:<function>` when the same function name appears in different files.
+/// 4. `<file>:<function>#<N>` when (3) and one of those files has multiple cases in that function.
+///
+/// Ordinals are 1-based and source-ordered by `byte_range.start`.
+fn compute_site_keys(sites: &[CaseSite]) -> Vec<String> {
+    let mut keys = vec![String::new(); sites.len()];
+
+    // Group indices by bare function name.
+    let mut by_function: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, site) in sites.iter().enumerate() {
+        by_function
+            .entry(site.function.clone())
+            .or_default()
+            .push(i);
+    }
+
+    for (fname, indices) in by_function {
+        if indices.len() == 1 {
+            keys[indices[0]] = fname;
+            continue;
+        }
+
+        // Subgroup by file display path.
+        let mut by_file: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for &i in &indices {
+            by_file.entry(sites[i].display.clone()).or_default().push(i);
+        }
+
+        if by_file.len() == 1 {
+            // All sites in one file: disambiguate with #N.
+            let mut sorted = indices;
+            sorted.sort_by_key(|&i| sites[i].byte_range.start);
+            for (ord, i) in sorted.into_iter().enumerate() {
+                keys[i] = format!("{}#{}", fname, ord + 1);
+            }
+        } else {
+            // Sites span multiple files: prefix with file:
+            for (file, file_indices) in by_file {
+                if file_indices.len() == 1 {
+                    keys[file_indices[0]] = format!("{}:{}", file, fname);
+                } else {
+                    let mut sorted = file_indices;
+                    sorted.sort_by_key(|&i| sites[i].byte_range.start);
+                    for (ord, i) in sorted.into_iter().enumerate() {
+                        keys[i] = format!("{}:{}#{}", file, fname, ord + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    keys
+}
+
 fn collect_case_exprs(
     node: &Node,
     source: &str,
@@ -471,8 +784,6 @@ fn collect_case_exprs(
 
         if matches {
             let wildcard = has_wildcard_branch(node, source);
-            let (branch_indent, body_indent) = get_branch_indentation(node, source);
-            let tuple_pos = detect_tuple_position(node, source, ctx, import_ctx);
             let function = find_enclosing_function(node, source);
 
             results.push(CaseExprInfo {
@@ -480,9 +791,6 @@ fn collect_case_exprs(
                 line: node.start_position().row + 1,
                 function,
                 has_wildcard: wildcard,
-                branch_indent,
-                body_indent,
-                tuple_position: tuple_pos,
             });
         }
     }
@@ -770,11 +1078,16 @@ fn relative_display(file: &Path, root: &PathBuf) -> String {
 // -- Public API --
 
 /// Add a variant to a custom type and insert branches in all case expressions project-wide.
+/// `fills` maps site keys (as produced by `compute_site_keys`) to branch text that replaces
+/// the default `Debug.todo "<VariantName>"` stub. Keys not matched by any site cause a
+/// pre-write error; sites not matched by any fill receive the default stub (graceful
+/// degradation).
 pub fn execute_add_variant(
     file: &Path,
     type_name: &str,
     definition: &str,
     dry_run: bool,
+    fills: HashMap<String, String>,
 ) -> Result<VariantResult> {
     let (constructor_name, arg_count) = parse_variant_definition(definition)?;
 
@@ -821,109 +1134,122 @@ pub fn execute_add_variant(
     // Step 1: Modify the type declaration file.
     let new_source = append_variant_to_type(&source, &tree, type_name, definition)?;
 
-    // Step 2: Walk the project and insert branches, collecting all writes.
+    // Step 2: Collect every matching case site across the project, using the modified
+    // type-file source so the walk sees the post-append state for the type's own file.
+    let mut source_overrides = HashMap::new();
+    source_overrides.insert(file.to_path_buf(), new_source.clone());
+    let sites = collect_case_sites(
+        &project,
+        &elm_files,
+        &target_module,
+        type_name,
+        &constructor_map,
+        &source_overrides,
+    )?;
+    let keys = compute_site_keys(&sites);
+
+    // Step 2b: validate fills against the computed keys before touching any file.
+    validate_fills(&fills, &keys)?;
+
+    // Step 3: Apply insertions file-by-file using the collected sites.
     let mut edits = Vec::new();
     let mut skipped = Vec::new();
     let mut pending_writes: Vec<(PathBuf, String)> = Vec::new();
-
-    // The type file itself is always written (with the new variant).
+    // The type file is always pending (it gets the new variant even if no case expressions matched).
     pending_writes.push((file.to_path_buf(), new_source.clone()));
 
-    for elm_file in &elm_files {
-        let file_source = if *elm_file == file.to_path_buf() {
-            // Use the modified source for the type's own file.
+    // Group site indices by file so we can run the per-file insertion loop against a
+    // single mutable `modified_source` and re-parse after each insertion to keep byte
+    // positions consistent.
+    let mut sites_by_file: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
+    for (i, site) in sites.iter().enumerate() {
+        sites_by_file.entry(site.file.clone()).or_default().push(i);
+    }
+
+    for (file_path, mut indices) in sites_by_file {
+        // Process sites within a file in reverse byte-order so earlier edits don't
+        // invalidate later byte ranges. The inner loop still re-parses after each
+        // insertion via `find_case_node_at` — byte ranges are approximate anchors.
+        indices.sort_by(|a, b| sites[*b].byte_range.start.cmp(&sites[*a].byte_range.start));
+
+        let starting_source = if file_path == file {
             new_source.clone()
         } else {
-            match std::fs::read_to_string(elm_file) {
+            match std::fs::read_to_string(&file_path) {
                 Ok(s) => s,
                 Err(_) => continue,
             }
         };
+        let mut modified_source = starting_source.clone();
 
-        let file_tree = match parser::parse(&file_source) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-
-        let root = file_tree.root_node();
-        let import_ctx = ImportContext::from_tree(&root, &file_source);
-        let module_name = match project.module_name(elm_file) {
+        // Type context has to be rebuilt per-file because `current_module` varies.
+        let module_name = match project.module_name(&file_path) {
             Ok(m) => m,
             Err(_) => continue,
         };
-        let display = relative_display(elm_file, &project.root);
-        let type_ctx = TypeContext {
-            target_module: &target_module,
-            target_type: type_name,
-            constructor_map: &constructor_map,
-            current_module: &module_name,
-        };
 
-        let case_exprs = find_matching_case_exprs(&root, &file_source, &type_ctx, &import_ctx);
-
-        if case_exprs.is_empty() {
-            continue;
-        }
-
-        // Process case expressions in reverse order (by byte offset) to preserve positions.
-        let mut sorted_cases = case_exprs;
-        sorted_cases.sort_by(|a, b| b.byte_range.start.cmp(&a.byte_range.start));
-
-        let mut modified_source = file_source.clone();
-
-        for case_info in &sorted_cases {
-            if case_info.has_wildcard {
+        for idx in &indices {
+            let site = &sites[*idx];
+            if site.has_wildcard {
                 skipped.push(CaseSkip {
-                    file: display.clone(),
-                    module: module_name.clone(),
-                    function: case_info.function.clone(),
-                    line: case_info.line,
+                    file: site.display.clone(),
+                    module: site.module.clone(),
+                    function: site.function.clone(),
+                    line: site.line,
                     reason: "wildcard branch covers new variant".to_string(),
                 });
                 continue;
             }
 
-            let branch_text = generate_branch(
-                &constructor_name,
-                arg_count,
-                case_info.branch_indent,
-                case_info.body_indent,
-                case_info.tuple_position.as_ref(),
-            );
+            let branch_text = if let Some(fill_body) = fills.get(&keys[*idx]) {
+                generate_filled_branch(site.branch_indent, fill_body)
+            } else {
+                generate_branch(
+                    &constructor_name,
+                    arg_count,
+                    site.branch_indent,
+                    site.body_indent,
+                    site.tuple_position.as_ref(),
+                )
+            };
 
-            // Re-parse to get fresh node positions after previous edits.
             let fresh_tree = parser::parse(&modified_source)?;
             let fresh_root = fresh_tree.root_node();
+            let fresh_import_ctx = ImportContext::from_tree(&fresh_root, &modified_source);
+            let type_ctx = TypeContext {
+                target_module: &target_module,
+                target_type: type_name,
+                constructor_map: &constructor_map,
+                current_module: &module_name,
+            };
 
-            // Find the case_of_expr at the expected position.
             if let Some(case_node) = find_case_node_at(
                 &fresh_root,
-                case_info.byte_range.start,
+                site.byte_range.start,
                 &modified_source,
                 &type_ctx,
-                &import_ctx,
+                &fresh_import_ctx,
             ) {
                 modified_source = insert_case_branch(&modified_source, &case_node, &branch_text);
                 edits.push(CaseEdit {
-                    file: display.clone(),
-                    module: module_name.clone(),
-                    function: case_info.function.clone(),
-                    line: case_info.line,
+                    file: site.display.clone(),
+                    module: site.module.clone(),
+                    function: site.function.clone(),
+                    line: site.line,
                 });
             }
         }
 
-        if modified_source != file_source {
-            if *elm_file == file.to_path_buf() {
-                // Update the existing entry for the type file.
+        if modified_source != starting_source {
+            if file_path == file {
                 pending_writes[0].1 = modified_source;
             } else {
-                pending_writes.push((elm_file.clone(), modified_source));
+                pending_writes.push((file_path, modified_source));
             }
         }
     }
 
-    // Step 3: Write all files atomically.
+    // Step 4: Write all files atomically.
     if !dry_run {
         for (path, content) in &pending_writes {
             writer::atomic_write(path, content)?;
@@ -936,6 +1262,196 @@ pub fn execute_add_variant(
         type_name: type_name.to_string(),
         variant_name: constructor_name,
         edits,
+        skipped,
+    })
+}
+
+/// Validate that every fill key corresponds to some site key. Bare-name fill keys
+/// that hit an ambiguous function name produce a targeted error listing the valid
+/// disambiguated keys (`function#1`, `function#2`, etc.). Unknown keys produce a
+/// generic error with the full key list to orient the caller on their next try.
+fn validate_fills(fills: &HashMap<String, String>, keys: &[String]) -> Result<()> {
+    if fills.is_empty() {
+        return Ok(());
+    }
+
+    let keyset: std::collections::HashSet<&str> = keys.iter().map(|s| s.as_str()).collect();
+    let mut errors: Vec<String> = Vec::new();
+
+    for fill_key in fills.keys() {
+        if keyset.contains(fill_key.as_str()) {
+            continue;
+        }
+
+        // Check for ambiguous bare name: does any site key start with "<fill_key>#"
+        // (same file, disambiguated by ordinal) or look like "<file>:<fill_key>[#N]"
+        // (different files disambiguated by path)?
+        let suffixed = format!("{}#", fill_key);
+        let mid_colon = format!(":{}", fill_key);
+        let disambiguations: Vec<&str> = keys
+            .iter()
+            .filter(|k| {
+                k.starts_with(&suffixed)
+                    || k.ends_with(&mid_colon)
+                    || k.contains(&format!("{}#", mid_colon))
+            })
+            .map(|s| s.as_str())
+            .collect();
+
+        if !disambiguations.is_empty() {
+            errors.push(format!(
+                "fill key '{}' is ambiguous; use one of: {}",
+                fill_key,
+                disambiguations.join(", ")
+            ));
+        } else if keys.is_empty() {
+            errors.push(format!(
+                "no case site matched fill key: {} (project has no case expressions on this type)\n  \
+                 hint: --fill only targets case expressions; use `elmq patch` for list-based dispatch (e.g. parser combinators)",
+                fill_key
+            ));
+        } else {
+            errors.push(format!(
+                "no case site matched fill key: {}\n  valid keys: {}\n  \
+                 hint: --fill only targets case expressions; use `elmq patch` for list-based dispatch (e.g. parser combinators)",
+                fill_key,
+                keys.join(", ")
+            ));
+        }
+    }
+
+    if !errors.is_empty() {
+        bail!("{}", errors.join("\n"));
+    }
+    Ok(())
+}
+
+/// Indent a user-supplied branch text so the first non-empty line lands at `branch_indent`
+/// and subsequent lines preserve their relative indentation. Auto-detects the user's
+/// baseline indent (minimum leading whitespace across non-empty lines) and rebases from
+/// there so both "zero-indented" inputs (`Reset -> text "reset"`) and already-indented
+/// inputs work identically.
+fn generate_filled_branch(branch_indent: usize, fill_text: &str) -> String {
+    let base_indent: usize = fill_text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+
+    let pad = " ".repeat(branch_indent);
+    fill_text
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                String::new()
+            } else {
+                let on_line = line.len() - line.trim_start().len();
+                let strip = base_indent.min(on_line);
+                format!("{}{}", pad, &line[strip..])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Read-only: collect every case expression in the project that matches on `type_name`
+/// and return each site with the full text of its enclosing top-level declaration.
+///
+/// This is the planning counterpart to `execute_add_variant` — the caller feeds the
+/// returned bodies and keys into `variant add --fill`, so both commands agree on
+/// which sites exist and what their stable identifiers are.
+pub fn execute_cases(file: &Path, type_name: &str) -> Result<CasesResult> {
+    let project = Project::discover(file)?;
+    let target_module = project.module_name(file)?;
+    let elm_files = project.elm_files()?;
+    let type_file_display = relative_display(file, &project.root);
+
+    // Validate the type exists in the supplied file before walking the project, so
+    // typos surface as a precise error instead of an empty result set.
+    let source = std::fs::read_to_string(file)
+        .with_context(|| format!("could not read {}", file.display()))?;
+    let tree = parser::parse(&source)?;
+    {
+        let root = tree.root_node();
+        let mut cursor = root.walk();
+        let mut found = false;
+        for child in root.named_children(&mut cursor) {
+            if child.kind() == "type_declaration"
+                && let Some(name_node) = child.child_by_field_name("name")
+                && let Ok(name) = name_node.utf8_text(source.as_bytes())
+                && name == type_name
+            {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            bail!("type {type_name} not found in {}", file.display());
+        }
+    }
+
+    let constructor_map = build_constructor_map(&project, &elm_files)?;
+    let collected = collect_case_sites(
+        &project,
+        &elm_files,
+        &target_module,
+        type_name,
+        &constructor_map,
+        &HashMap::new(),
+    )?;
+
+    // Split wildcard-covered sites off into `skipped`; only non-wildcard sites get
+    // keys because they are the ones that `variant add --fill` would write to.
+    let (active_sites, skipped_sites): (Vec<CaseSite>, Vec<CaseSite>) =
+        collected.into_iter().partition(|s| !s.has_wildcard);
+
+    let keys = compute_site_keys(&active_sites);
+
+    // Cache per-file sources so we only read each file once during body slicing.
+    let mut source_cache: HashMap<PathBuf, String> = HashMap::new();
+    let mut sites = Vec::with_capacity(active_sites.len());
+    for (i, site) in active_sites.iter().enumerate() {
+        let body = if site.declaration_byte_range.start == site.declaration_byte_range.end {
+            String::new()
+        } else {
+            let src = match source_cache.get(&site.file) {
+                Some(s) => s.clone(),
+                None => {
+                    let s = std::fs::read_to_string(&site.file)
+                        .with_context(|| format!("could not read {}", site.file.display()))?;
+                    source_cache.insert(site.file.clone(), s.clone());
+                    s
+                }
+            };
+            src[site.declaration_byte_range.clone()].to_string()
+        };
+
+        sites.push(CasesSite {
+            file: site.display.clone(),
+            module: site.module.clone(),
+            function: site.function.clone(),
+            key: keys[i].clone(),
+            line: site.line,
+            body,
+        });
+    }
+
+    let skipped: Vec<CaseSkip> = skipped_sites
+        .into_iter()
+        .map(|s| CaseSkip {
+            file: s.display,
+            module: s.module,
+            function: s.function,
+            line: s.line,
+            reason: "wildcard branch covers type".to_string(),
+        })
+        .collect();
+
+    Ok(CasesResult {
+        type_name: format!("{}.{}", target_module, type_name),
+        type_file: type_file_display,
+        sites,
         skipped,
     })
 }
@@ -1195,6 +1711,157 @@ mod tests {
             branch,
             "        ( SetName _, _ ) ->\n            Debug.todo \"SetName\""
         );
+    }
+
+    // -- compute_site_keys --
+    //
+    // These tests build synthetic CaseSite values (all tree-sitter metadata nulled out
+    // except the fields the key algorithm reads) to exercise the four qualification
+    // levels from design.md §3/§8 without needing real Elm source on disk.
+    fn stub_site(display: &str, function: &str, start: usize) -> CaseSite {
+        CaseSite {
+            file: PathBuf::from(display),
+            module: "M".to_string(),
+            display: display.to_string(),
+            function: function.to_string(),
+            line: 1,
+            byte_range: start..(start + 10),
+            has_wildcard: false,
+            branch_indent: 8,
+            body_indent: 12,
+            tuple_position: None,
+            declaration_byte_range: 0..0,
+        }
+    }
+
+    #[test]
+    fn site_key_single_site_is_bare_function() {
+        let sites = vec![stub_site("src/Main.elm", "update", 100)];
+        let keys = compute_site_keys(&sites);
+        assert_eq!(keys, vec!["update"]);
+    }
+
+    #[test]
+    fn site_key_multiple_sites_distinct_functions_stay_bare() {
+        let sites = vec![
+            stub_site("src/Main.elm", "update", 100),
+            stub_site("src/Main.elm", "view", 200),
+            stub_site("src/Main.elm", "subscriptions", 300),
+        ];
+        let keys = compute_site_keys(&sites);
+        assert_eq!(keys, vec!["update", "view", "subscriptions"]);
+    }
+
+    #[test]
+    fn site_key_two_cases_in_same_function_get_ordinals() {
+        let sites = vec![
+            stub_site("src/Main.elm", "update", 500),
+            stub_site("src/Main.elm", "update", 100),
+        ];
+        let keys = compute_site_keys(&sites);
+        // Sites at byte 100 should get #1 (earlier in source), byte 500 gets #2.
+        assert_eq!(keys, vec!["update#2", "update#1"]);
+    }
+
+    #[test]
+    fn site_key_same_function_in_different_files_gets_file_prefix() {
+        let sites = vec![
+            stub_site("src/Main.elm", "update", 100),
+            stub_site("src/Page.elm", "update", 200),
+        ];
+        let keys = compute_site_keys(&sites);
+        assert_eq!(keys, vec!["src/Main.elm:update", "src/Page.elm:update"]);
+    }
+
+    #[test]
+    fn site_key_full_qualification_file_and_ordinal() {
+        // Two files both define `update`. One file has two case expressions inside
+        // `update`. Expected shape:
+        //   src/Main.elm:update#1, src/Main.elm:update#2, src/Page.elm:update
+        let sites = vec![
+            stub_site("src/Main.elm", "update", 500),
+            stub_site("src/Main.elm", "update", 100),
+            stub_site("src/Page.elm", "update", 200),
+        ];
+        let keys = compute_site_keys(&sites);
+        // Main's byte-100 site sorts before byte-500 → #1 / #2.
+        assert_eq!(
+            keys,
+            vec![
+                "src/Main.elm:update#2",
+                "src/Main.elm:update#1",
+                "src/Page.elm:update",
+            ]
+        );
+    }
+
+    // -- validate_fills --
+
+    #[test]
+    fn validate_fills_accepts_matching_bare_key() {
+        let mut fills = HashMap::new();
+        fills.insert("update".to_string(), "Reset -> model".to_string());
+        let keys = vec!["update".to_string(), "view".to_string()];
+        assert!(validate_fills(&fills, &keys).is_ok());
+    }
+
+    #[test]
+    fn validate_fills_rejects_unknown_key() {
+        let mut fills = HashMap::new();
+        fills.insert("nosuch".to_string(), "body".to_string());
+        let keys = vec!["update".to_string(), "view".to_string()];
+        let err = validate_fills(&fills, &keys).unwrap_err().to_string();
+        assert!(err.contains("no case site matched fill key: nosuch"));
+        assert!(err.contains("update"));
+        assert!(err.contains("view"));
+    }
+
+    #[test]
+    fn validate_fills_rejects_ambiguous_bare_key() {
+        let mut fills = HashMap::new();
+        fills.insert("update".to_string(), "body".to_string());
+        let keys = vec!["update#1".to_string(), "update#2".to_string()];
+        let err = validate_fills(&fills, &keys).unwrap_err().to_string();
+        assert!(err.contains("'update' is ambiguous"));
+        assert!(err.contains("update#1"));
+        assert!(err.contains("update#2"));
+    }
+
+    #[test]
+    fn validate_fills_rejects_ambiguous_across_files() {
+        let mut fills = HashMap::new();
+        fills.insert("update".to_string(), "body".to_string());
+        let keys = vec![
+            "src/Main.elm:update".to_string(),
+            "src/Page.elm:update".to_string(),
+        ];
+        let err = validate_fills(&fills, &keys).unwrap_err().to_string();
+        assert!(err.contains("'update' is ambiguous"));
+        assert!(err.contains("src/Main.elm:update"));
+        assert!(err.contains("src/Page.elm:update"));
+    }
+
+    // -- generate_filled_branch --
+
+    #[test]
+    fn filled_branch_zero_indented_input() {
+        let out = generate_filled_branch(8, "Reset -> text \"reset\"");
+        assert_eq!(out, "        Reset -> text \"reset\"");
+    }
+
+    #[test]
+    fn filled_branch_multiline_input() {
+        let input = "Reset ->\n    text \"reset\"";
+        let out = generate_filled_branch(8, input);
+        assert_eq!(out, "        Reset ->\n            text \"reset\"");
+    }
+
+    #[test]
+    fn filled_branch_rebases_already_indented_input() {
+        // User wrote at base indent 4 (e.g. from pasting code); we rebase to 8.
+        let input = "    Reset ->\n        text \"reset\"";
+        let out = generate_filled_branch(8, input);
+        assert_eq!(out, "        Reset ->\n            text \"reset\"");
     }
 
     #[test]

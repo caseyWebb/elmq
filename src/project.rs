@@ -20,6 +20,36 @@ struct ElmJson {
 
 impl Project {
     /// Discover a project by walking up from `start` looking for elm.json.
+    /// Returns `Ok(Some(project))` if an ancestor `elm.json` is found,
+    /// `Ok(None)` if none is found anywhere up the tree, or `Err` on I/O
+    /// errors or a malformed `elm.json`.
+    ///
+    /// Unlike [`Project::discover`], this does not treat a missing `elm.json`
+    /// as an error — callers can fall back to CWD-rooted walking when this
+    /// returns `None`.
+    pub fn try_discover(start: &Path) -> Result<Option<Self>> {
+        let start = start
+            .canonicalize()
+            .with_context(|| format!("could not resolve path: {}", start.display()))?;
+
+        let mut dir = if start.is_file() {
+            start.parent().unwrap_or(&start).to_path_buf()
+        } else {
+            start.clone()
+        };
+
+        loop {
+            let candidate = dir.join("elm.json");
+            if candidate.is_file() {
+                return Self::from_elm_json(&candidate).map(Some);
+            }
+            if !dir.pop() {
+                return Ok(None);
+            }
+        }
+    }
+
+    /// Discover a project by walking up from `start` looking for elm.json.
     pub fn discover(start: &Path) -> Result<Self> {
         let start = start
             .canonicalize()
@@ -129,6 +159,14 @@ impl Project {
         }
 
         Ok(module_name)
+    }
+
+    /// Resolve a file path to its Elm module name, returning `None` when no
+    /// `elm.json` is discoverable. Convenience wrapper used by multi-file `get`
+    /// and `grep --source` for output framing.
+    pub fn resolve_module_for_file(file: &Path) -> Option<String> {
+        let project = Self::try_discover(file).ok()??;
+        project.module_name(file).ok()
     }
 
     /// List all .elm files across all source directories.

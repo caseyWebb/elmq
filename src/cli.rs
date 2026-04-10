@@ -10,10 +10,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Show a summary of an Elm file
+    /// Show a summary of one or more Elm files
     List {
-        /// Path to the Elm file
-        file: PathBuf,
+        /// Paths to the Elm files (one or more)
+        #[arg(num_args = 1.., required = true)]
+        files: Vec<PathBuf>,
 
         /// Output format
         #[arg(long, value_enum, default_value_t = Format::Compact)]
@@ -23,13 +24,31 @@ pub enum Command {
         #[arg(long)]
         docs: bool,
     },
-    /// Extract the full source of a declaration by name
+    /// Extract the full source of one or more declarations by name
+    ///
+    /// Two forms:
+    ///   elmq get <FILE> <NAME>...           bare positional (single file)
+    ///   elmq get -f <FILE> <NAME>... [-f …] grouped multi-file
+    ///
+    /// The forms are mutually exclusive; mixing positionals with -f is a usage
+    /// error. Each -f group takes a file path followed by one or more names.
     Get {
-        /// Path to the Elm file
-        file: PathBuf,
+        /// Path to the Elm file (bare positional form; omit when using -f)
+        file: Option<PathBuf>,
 
-        /// Name of the declaration to extract
-        name: String,
+        /// Names of declarations to extract (bare positional form; omit when using -f)
+        #[arg(num_args = 0..)]
+        names: Vec<String>,
+
+        // Design note (task 1.2): clap derive cannot represent per-occurrence
+        // value groups directly — Vec<Vec<String>> is not supported because
+        // Vec<String> doesn't implement FromStr. We store the flat
+        // concatenation here and recover occurrence boundaries via
+        // ArgMatches::get_occurrences in main.rs. The derive field exists
+        // so clap generates correct help text and validates num_args.
+        /// File group: -f <FILE> <NAME>... (repeatable for multi-file reads)
+        #[arg(short = 'f', long = "file", num_args = 2.., action = clap::ArgAction::Append)]
+        from: Vec<String>,
 
         /// Output format
         #[arg(long, value_enum, default_value_t = Format::Compact)]
@@ -60,34 +79,37 @@ pub enum Command {
         #[arg(long)]
         new: String,
     },
-    /// Remove a declaration by name
+    /// Remove one or more declarations by name
     Rm {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Name of the declaration to remove
-        name: String,
+        /// Names of declarations to remove (one or more)
+        #[arg(num_args = 1.., required = true)]
+        names: Vec<String>,
     },
     /// Manage imports
     Import {
         #[command(subcommand)]
         command: ImportCommand,
     },
-    /// Add an item to the module's exposing list
+    /// Add one or more items to the module's exposing list
     Expose {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Item to expose (e.g. "update" or "Msg(..)")
-        item: String,
+        /// Items to expose (one or more, e.g. "update", "Msg(..)")
+        #[arg(num_args = 1.., required = true)]
+        items: Vec<String>,
     },
-    /// Remove an item from the module's exposing list
+    /// Remove one or more items from the module's exposing list
     Unexpose {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Item to unexpose (e.g. "helper")
-        item: String,
+        /// Items to unexpose (one or more)
+        #[arg(num_args = 1.., required = true)]
+        items: Vec<String>,
     },
     /// Rename a module: move file and update all imports and qualified references
     Mv {
@@ -105,13 +127,14 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Find all references to a module or declaration across the project
+    /// Find all references to a module or one or more declarations across the project
     Refs {
         /// Path to the Elm file whose module to search for
         file: PathBuf,
 
-        /// Declaration name to search for (if omitted, reports module-level imports)
-        name: Option<String>,
+        /// Declaration names to search for (zero or more; if omitted, reports module-level imports)
+        #[arg(num_args = 0..)]
+        names: Vec<String>,
 
         /// Output format
         #[arg(long, value_enum, default_value_t = Format::Compact)]
@@ -141,13 +164,13 @@ pub enum Command {
         /// Path to the source Elm file
         file: PathBuf,
 
-        /// Names of declarations to move (can be repeated)
-        #[arg(long = "name")]
-        names: Vec<String>,
-
         /// Path to the target Elm file
         #[arg(long = "to")]
         target: PathBuf,
+
+        /// Names of declarations to move (one or more, positional)
+        #[arg(num_args = 1.., required = true)]
+        names: Vec<String>,
 
         /// Copy shared helpers instead of erroring
         #[arg(long)]
@@ -166,6 +189,60 @@ pub enum Command {
         #[command(subcommand)]
         command: VariantCommand,
     },
+    /// Search for a regex in Elm sources, annotated with enclosing top-level declaration.
+    ///
+    /// This is the discovery entry point: use `elmq grep` to locate text in Elm files
+    /// and get back the containing declaration name for free, then pipe into `elmq get`.
+    ///
+    /// By default, matches inside comments (`--` and `{- -}`) and inside string literals
+    /// (including `"""`) are filtered out. Pass `--include-comments` or `--include-strings`
+    /// to re-enable each class independently.
+    ///
+    /// Project discovery walks up for `elm.json`; if none is found, falls back to
+    /// recursively walking the current directory. Both paths honor `.gitignore`.
+    ///
+    /// Exit codes: 0 if matches found, 1 if none, 2 on error. Matches ripgrep.
+    Grep {
+        /// Regex pattern (Rust-regex syntax). Use -F for literal matching.
+        pattern: String,
+
+        /// Optional path to restrict search to (file or directory).
+        path: Option<PathBuf>,
+
+        /// Treat the pattern as a literal string rather than a regex.
+        #[arg(short = 'F', long)]
+        fixed: bool,
+
+        /// Case-insensitive matching.
+        #[arg(short = 'i', long)]
+        ignore_case: bool,
+
+        /// Include matches that fall inside `--` or `{- -}` comments (filtered by default).
+        #[arg(long)]
+        include_comments: bool,
+
+        /// Include matches that fall inside string literals (filtered by default).
+        #[arg(long)]
+        include_strings: bool,
+
+        /// Only emit matches at the declaration name site (not call sites).
+        #[arg(long)]
+        definitions: bool,
+
+        /// Emit full declaration source for each matched decl, deduped by (file, decl).
+        #[arg(long)]
+        source: bool,
+
+        /// Output format: compact `file:line:decl:text` (default) or NDJSON.
+        #[arg(long, value_enum, default_value_t = GrepFormat::Compact)]
+        format: GrepFormat,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum GrepFormat {
+    Compact,
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -189,6 +266,28 @@ pub enum VariantCommand {
         /// Preview changes without writing anything
         #[arg(long)]
         dry_run: bool,
+
+        /// Fill a case-site branch body instead of the default `Debug.todo "<Variant>"`
+        /// stub. Syntax: `--fill <key>=<branch_text>` (repeatable). Split on the first
+        /// `=`; the key comes from `elmq variant cases` output, the body is the branch
+        /// text that replaces the stub.
+        #[arg(long, value_name = "KEY=BRANCH")]
+        fill: Vec<String>,
+    },
+    /// List every case expression on a type, with its enclosing function body and a
+    /// stable site key. Read-only companion to `variant add --fill` — run this first
+    /// to gather the context needed to synthesize fill bodies.
+    Cases {
+        /// Path to the Elm file that declares the custom type
+        file: PathBuf,
+
+        /// Name of the custom type (e.g. "Msg")
+        #[arg(long = "type")]
+        type_name: String,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Compact)]
+        format: Format,
     },
     /// Remove a constructor from a custom type and remove branches from all case expressions
     Rm {
@@ -214,21 +313,23 @@ pub enum VariantCommand {
 
 #[derive(Subcommand)]
 pub enum ImportCommand {
-    /// Add or replace an import
+    /// Add one or more imports
     Add {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Import clause (e.g. "Html exposing (Html, div, text)")
-        import: String,
+        /// Import clauses (one or more, e.g. "Html exposing (Html, div, text)")
+        #[arg(num_args = 1.., required = true)]
+        imports: Vec<String>,
     },
-    /// Remove an import by module name
+    /// Remove one or more imports by module name
     Remove {
         /// Path to the Elm file
         file: PathBuf,
 
-        /// Module name to remove (e.g. "Html")
-        module_name: String,
+        /// Module names to remove (one or more)
+        #[arg(num_args = 1.., required = true)]
+        module_names: Vec<String>,
     },
 }
 

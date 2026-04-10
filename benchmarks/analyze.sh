@@ -71,17 +71,98 @@ format_int() {
 
 # Extract metrics from a session.json (stream-json format: one JSON object per line).
 # The result message (last line with type=result) contains usage and duration.
-# Returns: input_tokens output_tokens cache_read cache_create duration_ms
+# Returns: input_tokens output_tokens cache_read cache_create duration_ms num_turns
 extract_session_stats() {
     local file="$1"
     if [ ! -f "$file" ]; then
-        echo "0 0 0 0 0"
+        echo "0 0 0 0 0 0"
         return
     fi
     grep '"type":"result"' "$file" | tail -1 | jq -r '
         ((.usage // {}) as $u |
-         "\($u.input_tokens // 0) \($u.output_tokens // 0) \($u.cache_read_input_tokens // 0) \($u.cache_creation_input_tokens // 0) \(.duration_ms // 0)")
-    ' 2>/dev/null || echo "0 0 0 0 0"
+         "\($u.input_tokens // 0) \($u.output_tokens // 0) \($u.cache_read_input_tokens // 0) \($u.cache_creation_input_tokens // 0) \(.duration_ms // 0) \(.num_turns // 0)")
+    ' 2>/dev/null || echo "0 0 0 0 0 0"
+}
+
+# Anthropic Sonnet 4.6 pricing, USD per million tokens.
+# Cache write uses the 5-minute TTL price; adjust if the harness moves to 1h caching.
+# Source: https://www.anthropic.com/pricing
+PRICE_INPUT="3.00"
+PRICE_OUTPUT="15.00"
+PRICE_CACHE_READ="0.30"
+PRICE_CACHE_WRITE="3.75"
+
+# Compute cost in integer micro-dollars (millionths of a dollar) from raw token counts.
+# Integer output keeps downstream comparisons pure-bash; format_cost renders it as $X.XXXX.
+compute_cost_micros() {
+    local in="$1" out="$2" cr="$3" cc="$4"
+    awk -v i="${in:-0}" -v o="${out:-0}" -v cr="${cr:-0}" -v cc="${cc:-0}" \
+        -v pi="$PRICE_INPUT" -v po="$PRICE_OUTPUT" -v pr="$PRICE_CACHE_READ" -v pw="$PRICE_CACHE_WRITE" \
+        'BEGIN { printf "%d", int(i*pi + o*po + cr*pr + cc*pw + 0.5) }'
+}
+
+# Format micro-dollars as "$X.XXXX"
+format_cost() {
+    local micros="${1:-0}"
+    awk -v m="$micros" 'BEGIN { printf "$%.4f", m/1000000 }'
+}
+
+# Compute sample standard deviation from space-separated values.
+# Usage: echo "v1 v2 v3" | compute_stddev
+# Returns integer (rounded). For n<=1, returns 0.
+compute_stddev() {
+    awk '{
+        n = NF
+        if (n <= 1) { print 0; exit }
+        sum = 0
+        for (i = 1; i <= n; i++) sum += $i
+        mean = sum / n
+        ss = 0
+        for (i = 1; i <= n; i++) ss += ($i - mean)^2
+        printf "%d", int(sqrt(ss / (n - 1)) + 0.5)
+    }'
+}
+
+# Find outliers (>2σ from mean). Takes space-separated values.
+# Prints "index:value" for each outlier (1-indexed). Empty output = no outliers.
+find_outliers() {
+    awk '{
+        n = NF
+        if (n <= 2) exit
+        sum = 0
+        for (i = 1; i <= n; i++) sum += $i
+        mean = sum / n
+        ss = 0
+        for (i = 1; i <= n; i++) ss += ($i - mean)^2
+        sd = sqrt(ss / (n - 1))
+        if (sd == 0) exit
+        for (i = 1; i <= n; i++) {
+            if ( ($i - mean) > 2*sd || (mean - $i) > 2*sd )
+                printf "%d:%s\n", i, $i
+        }
+    }'
+}
+
+# Pick a color based on whether $1 beats $2. Lower wins by default; pass reverse=1 for
+# metrics where higher is better (e.g. PASS counts). Returns bold-green for a win,
+# empty (default) for a loss, and dim for ties or missing opponents.
+metric_color() {
+    local mine="${1:-}" theirs="${2:-}" reverse="${3:-0}"
+    if [ -z "$mine" ] || [ -z "$theirs" ]; then
+        printf '%s' "$C_DIM"
+        return
+    fi
+    if [ "$reverse" = "1" ]; then
+        if [ "$mine" -gt "$theirs" ]; then printf '%s' "$C_BOLD$C_GREEN"
+        elif [ "$mine" -lt "$theirs" ]; then printf '%s' ""
+        else printf '%s' "$C_DIM"
+        fi
+    else
+        if [ "$mine" -lt "$theirs" ]; then printf '%s' "$C_BOLD$C_GREEN"
+        elif [ "$mine" -gt "$theirs" ]; then printf '%s' ""
+        else printf '%s' "$C_DIM"
+        fi
+    fi
 }
 
 # Count tool calls in a session.json (stream-json format)
@@ -92,7 +173,9 @@ count_tool_calls() {
         echo "0"
         return
     fi
-    grep -c '"tool_use"' "$file" 2>/dev/null || echo "0"
+    local n
+    n=$(grep -c '"tool_use"' "$file" 2>/dev/null) || true
+    echo "${n:-0}"
 }
 
 # Get tool call breakdown from a session.json
@@ -160,9 +243,13 @@ for scenario in "${SCENARIOS[@]}"; do
         total_cache_read=0
         total_cache_create=0
         total_tools=0
+        total_turns=0
         total_duration=0
         pass_count=0
         run_count=0
+        cost_vals=""
+        turns_vals=""
+        run_names=""
 
         for run_dir in "$arm_dir"/*/; do
             [ -d "$run_dir" ] || continue
@@ -177,12 +264,18 @@ for scenario in "${SCENARIOS[@]}"; do
 
             run_count=$((run_count + 1))
 
-            read -r input output cache_read cache_create duration_ms <<< "$(extract_session_stats "$session_file")"
+            read -r input output cache_read cache_create duration_ms turns <<< "$(extract_session_stats "$session_file")"
             total_input=$((total_input + input))
             total_output=$((total_output + output))
             total_cache_read=$((total_cache_read + cache_read))
             total_cache_create=$((total_cache_create + cache_create))
             total_duration=$((total_duration + duration_ms))
+            total_turns=$((total_turns + turns))
+
+            run_cost="$(compute_cost_micros "$input" "$output" "$cache_read" "$cache_create")"
+            cost_vals="$cost_vals $run_cost"
+            turns_vals="$turns_vals $turns"
+            run_names="$run_names $(basename "$run_dir")"
 
             tools="$(count_tool_calls "$session_file")"
             total_tools=$((total_tools + tools))
@@ -198,244 +291,364 @@ for scenario in "${SCENARIOS[@]}"; do
             continue
         fi
 
-        agg_set INPUT    "$scenario" "$arm" $((total_input / run_count))
-        agg_set OUTPUT   "$scenario" "$arm" $((total_output / run_count))
-        agg_set CACHE_R  "$scenario" "$arm" $((total_cache_read / run_count))
-        agg_set CACHE_C  "$scenario" "$arm" $((total_cache_create / run_count))
-        agg_set TOTAL    "$scenario" "$arm" $(( (total_input + total_output + total_cache_read + total_cache_create) / run_count ))
+        agg_set COST_VALS  "$scenario" "$arm" "$cost_vals"
+        agg_set TURNS_VALS "$scenario" "$arm" "$turns_vals"
+        agg_set RUN_NAMES  "$scenario" "$arm" "$run_names"
+        agg_set COST_SD    "$scenario" "$arm" "$(echo "$cost_vals" | compute_stddev)"
+        agg_set TURNS_SD   "$scenario" "$arm" "$(echo "$turns_vals" | compute_stddev)"
+
+        avg_input=$((total_input / run_count))
+        avg_output=$((total_output / run_count))
+        avg_cache_read=$((total_cache_read / run_count))
+        avg_cache_create=$((total_cache_create / run_count))
+
+        agg_set INPUT    "$scenario" "$arm" "$avg_input"
+        agg_set OUTPUT   "$scenario" "$arm" "$avg_output"
+        agg_set CACHE_R  "$scenario" "$arm" "$avg_cache_read"
+        agg_set CACHE_C  "$scenario" "$arm" "$avg_cache_create"
+        agg_set CACHED   "$scenario" "$arm" $((avg_cache_read + avg_cache_create))
+        agg_set TOKENS   "$scenario" "$arm" $((avg_input + avg_output))
+        agg_set COST     "$scenario" "$arm" "$(compute_cost_micros "$avg_input" "$avg_output" "$avg_cache_read" "$avg_cache_create")"
         agg_set TOOLS    "$scenario" "$arm" $((total_tools / run_count))
+        agg_set TURNS    "$scenario" "$arm" $((total_turns / run_count))
         agg_set DURATION "$scenario" "$arm" $((total_duration / run_count))
         agg_set PASS     "$scenario" "$arm" "$pass_count"
     done
 done
 
 # ---------------------------------------------------------------------------
-# Render: WINNERS table
+# Phase 2: detect outliers (>2σ from mean) — warn but still include in stats
 # ---------------------------------------------------------------------------
-printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
-printf '%s%s%s\n' "$C_BOLD$C_CYAN" "  Winners (all-billable tokens, lower = better)" "$C_RESET"
-printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
-echo ""
-
-winners_header_fmt="%-22s %14s %14s %14s %9s   %-8s\n"
-winners_row_fmt="%-22s %14s %14s %s%14s%s %s%8s%s   %s%-8s%s\n"
-printf "$winners_header_fmt" "SCENARIO" "CTRL_TOTAL" "TRT_TOTAL" "Δ TOKENS" "Δ %" "WINNER"
-printf '%s\n' "$(printf '%.0s-' {1..90})"
-
-overall_ctrl=0
-overall_trt=0
-overall_gated=1   # 1 = still eligible for overall winner (all scenarios fully passing)
-
+outlier_warnings=""
 for scenario in "${SCENARIOS[@]}"; do
-    cruns=$(agg_get RUNS "$scenario" control); cruns=${cruns:-0}
-    truns=$(agg_get RUNS "$scenario" treatment); truns=${truns:-0}
-    if [ "$cruns" -eq 0 ] || [ "$truns" -eq 0 ]; then
-        overall_gated=0
-        continue
-    fi
+    for arm in "${ARMS[@]}"; do
+        runs=$(agg_get RUNS "$scenario" "$arm"); runs=${runs:-0}
+        [ "$runs" -le 2 ] && continue
 
-    c_total=$(agg_get TOTAL "$scenario" control)
-    t_total=$(agg_get TOTAL "$scenario" treatment)
-    overall_ctrl=$((overall_ctrl + c_total))
-    overall_trt=$((overall_trt + t_total))
+        cost_vals=$(agg_get COST_VALS "$scenario" "$arm")
+        turns_vals=$(agg_get TURNS_VALS "$scenario" "$arm")
+        run_names_str=$(agg_get RUN_NAMES "$scenario" "$arm")
 
-    delta=$((t_total - c_total))
-    # pct = delta / c_total * 100 (awk for float)
-    pct=$(awk -v d="$delta" -v c="$c_total" 'BEGIN{ if (c==0) print "0.0"; else printf "%.1f", (d/c)*100 }')
+        # Convert run_names to an array for index lookup
+        read -ra _rn_arr <<< "$run_names_str"
 
-    # Sign-prefix the delta display.
-    if [ "$delta" -gt 0 ]; then
-        delta_str="+$(format_int "$delta")"
-        pct_str="+${pct}%"
-        delta_color="$C_RED"
-    elif [ "$delta" -lt 0 ]; then
-        delta_str="$(format_int "$delta")"
-        pct_str="${pct}%"
-        delta_color="$C_GREEN"
-    else
-        delta_str="0"
-        pct_str="0.0%"
-        delta_color="$C_DIM"
-    fi
+        cost_outliers=$(echo "$cost_vals" | find_outliers)
+        turns_outliers=$(echo "$turns_vals" | find_outliers)
 
-    # Winner gating: both arms must have all runs passing.
-    cpass=$(agg_get PASS "$scenario" control); cpass=${cpass:-0}
-    tpass=$(agg_get PASS "$scenario" treatment); tpass=${tpass:-0}
-    both_pass=0
-    if [ "$cpass" -eq "$cruns" ] && [ "$tpass" -eq "$truns" ]; then
-        both_pass=1
-    else
-        overall_gated=0
-    fi
-
-    if [ "$both_pass" -eq 1 ]; then
-        if [ "$delta" -lt 0 ]; then
-            winner_str="trt"
-            winner_color="$C_GREEN"
-        elif [ "$delta" -gt 0 ]; then
-            winner_str="ctrl"
-            winner_color="$C_GREEN"
-        else
-            winner_str="tie"
-            winner_color="$C_DIM"
+        if [ -n "$cost_outliers" ]; then
+            while IFS=: read -r idx val; do
+                [ -z "$idx" ] && continue
+                rname="${_rn_arr[$((idx-1))]:-run#$idx}"
+                outlier_warnings="${outlier_warnings}${scenario} ${arm} ${rname} COST $(format_cost "$val")
+"
+            done <<< "$cost_outliers"
         fi
-    else
-        winner_str="— (c:${cpass}/${cruns} t:${tpass}/${truns})"
-        winner_color="$C_DIM"
-    fi
-
-    printf "$winners_row_fmt" \
-        "$scenario" \
-        "$(format_int "$c_total")" \
-        "$(format_int "$t_total")" \
-        "$delta_color" "$delta_str" "$C_RESET" \
-        "$delta_color" "$pct_str" "$C_RESET" \
-        "$winner_color" "$winner_str" "$C_RESET"
+        if [ -n "$turns_outliers" ]; then
+            while IFS=: read -r idx val; do
+                [ -z "$idx" ] && continue
+                rname="${_rn_arr[$((idx-1))]:-run#$idx}"
+                outlier_warnings="${outlier_warnings}${scenario} ${arm} ${rname} TURNS ${val}
+"
+            done <<< "$turns_outliers"
+        fi
+    done
 done
 
-# OVERALL row (sum of per-scenario averages)
-if [ "$overall_ctrl" -gt 0 ]; then
-    printf '%s\n' "$(printf '%.0s-' {1..90})"
-    o_delta=$((overall_trt - overall_ctrl))
-    o_pct=$(awk -v d="$o_delta" -v c="$overall_ctrl" 'BEGIN{ if (c==0) print "0.0"; else printf "%.1f", (d/c)*100 }')
-    if [ "$o_delta" -gt 0 ]; then
-        o_delta_str="+$(format_int "$o_delta")"
-        o_pct_str="+${o_pct}%"
-        o_color="$C_RED"
-    elif [ "$o_delta" -lt 0 ]; then
-        o_delta_str="$(format_int "$o_delta")"
-        o_pct_str="${o_pct}%"
-        o_color="$C_GREEN"
-    else
-        o_delta_str="0"
-        o_pct_str="0.0%"
-        o_color="$C_DIM"
+# ---------------------------------------------------------------------------
+# Render: DETAIL table (per-arm, per-metric winner highlighting)
+#
+# Each scenario gets two rows (control, treatment). For every numeric metric
+# we compare the two arms and bold-green the winner (lower for tokens/cost/
+# time/turns; higher for PASS). Ties and missing opponents render dim.
+#
+# Columns: INPUT / OUTPUT / CACHE_R / CACHE_C / COST / TURNS / TIME / PASS.
+# TOTAL is intentionally gone — the old "all-billable tokens" sum weighted
+# cheap cache reads equally with expensive output tokens, which hid real
+# wins and exaggerated regressions. COST is the realistic substitute.
+# ---------------------------------------------------------------------------
+printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
+printf '%s%s%s\n' "$C_BOLD$C_CYAN" "  Per-scenario detail (averages across runs, winners bolded)" "$C_RESET"
+printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
+echo ""
+printf '%sPricing: input $%s/M · output $%s/M · cache read $%s/M · cache write $%s/M (Sonnet 4.6)%s\n' \
+    "$C_DIM" "$PRICE_INPUT" "$PRICE_OUTPUT" "$PRICE_CACHE_READ" "$PRICE_CACHE_WRITE" "$C_RESET"
+echo ""
+
+detail_header_fmt="%-20s %-10s %10s %10s %11s %10s %10s %7s %7s %7s\n"
+printf "$detail_header_fmt" \
+    "SCENARIO" "ARM" "INPUT" "OUTPUT" "CACHE_R" "CACHE_C" "COST" "TURNS" "TIME" "PASS"
+printf '%s\n' "$(printf '%.0s-' {1..110})"
+
+# Track grand totals across all scenarios where both arms produced data, so we
+# can render a final OVERALL row.
+overall_ctrl_cost=0
+overall_trt_cost=0
+overall_ctrl_tokens=0
+overall_trt_tokens=0
+overall_ctrl_cached=0
+overall_trt_cached=0
+overall_ctrl_duration=0
+overall_trt_duration=0
+overall_ctrl_turns=0
+overall_trt_turns=0
+overall_ctrl_pass=0
+overall_trt_pass=0
+overall_ctrl_runs=0
+overall_trt_runs=0
+
+print_detail_row() {
+    # Prints one arm's row with per-cell coloring. Opponent values drive the
+    # winner decision for each metric; when the opponent is missing we dim.
+    local scenario="$1" arm="$2"
+    local runs pass input output cache_r cache_c cost turns duration
+    local o_input o_output o_cache_r o_cache_c o_cost o_turns o_duration o_pass o_runs
+    local other_arm
+
+    if [ "$arm" = "control" ]; then other_arm="treatment"; else other_arm="control"; fi
+
+    runs=$(agg_get RUNS "$scenario" "$arm"); runs=${runs:-0}
+    o_runs=$(agg_get RUNS "$scenario" "$other_arm"); o_runs=${o_runs:-0}
+
+    if [ "$runs" -eq 0 ]; then
+        printf "%-20s %s%-10s %10s %10s %11s %10s %10s %7s %7s %7s%s\n" \
+            "$scenario" "$C_DIM" "$arm" "-" "-" "-" "-" "-" "-" "-" "-" "$C_RESET"
+        return
     fi
 
-    if [ "$overall_gated" -eq 1 ]; then
-        if [ "$o_delta" -lt 0 ]; then
-            o_winner="trt"
-            o_winner_color="$C_BOLD$C_GREEN"
-        elif [ "$o_delta" -gt 0 ]; then
-            o_winner="ctrl"
-            o_winner_color="$C_BOLD$C_GREEN"
+    input=$(agg_get INPUT "$scenario" "$arm")
+    output=$(agg_get OUTPUT "$scenario" "$arm")
+    cache_r=$(agg_get CACHE_R "$scenario" "$arm")
+    cache_c=$(agg_get CACHE_C "$scenario" "$arm")
+    cost=$(agg_get COST "$scenario" "$arm")
+    turns=$(agg_get TURNS "$scenario" "$arm")
+    duration=$(agg_get DURATION "$scenario" "$arm")
+    pass=$(agg_get PASS "$scenario" "$arm"); pass=${pass:-0}
+
+    if [ "$o_runs" -gt 0 ]; then
+        o_input=$(agg_get INPUT "$scenario" "$other_arm")
+        o_output=$(agg_get OUTPUT "$scenario" "$other_arm")
+        o_cache_r=$(agg_get CACHE_R "$scenario" "$other_arm")
+        o_cache_c=$(agg_get CACHE_C "$scenario" "$other_arm")
+        o_cost=$(agg_get COST "$scenario" "$other_arm")
+        o_turns=$(agg_get TURNS "$scenario" "$other_arm")
+        o_duration=$(agg_get DURATION "$scenario" "$other_arm")
+        o_pass=$(agg_get PASS "$scenario" "$other_arm"); o_pass=${o_pass:-0}
+    else
+        o_input=""; o_output=""; o_cache_r=""; o_cache_c=""
+        o_cost=""; o_turns=""; o_duration=""; o_pass=""
+    fi
+
+    local c_in c_out c_cr c_cc c_cost c_turns c_time c_pass
+    c_in=$(metric_color    "$input"    "$o_input")
+    c_out=$(metric_color   "$output"   "$o_output")
+    c_cr=$(metric_color    "$cache_r"  "$o_cache_r")
+    c_cc=$(metric_color    "$cache_c"  "$o_cache_c")
+    c_cost=$(metric_color  "$cost"     "$o_cost")
+    c_turns=$(metric_color "$turns"    "$o_turns")
+    c_time=$(metric_color  "$duration" "$o_duration")
+    # PASS: higher is better; we compare pass rates as pass*other_runs vs other_pass*runs
+    # to avoid floating-point, but simpler: just compare fractions via cross-multiplication.
+    local pass_cell_color=""
+    if [ -n "$o_pass" ] && [ "$o_runs" -gt 0 ]; then
+        if [ $((pass * o_runs)) -gt $((o_pass * runs)) ]; then
+            pass_cell_color="$C_BOLD$C_GREEN"
+        elif [ $((pass * o_runs)) -lt $((o_pass * runs)) ]; then
+            pass_cell_color=""
         else
-            o_winner="tie"
-            o_winner_color="$C_DIM"
+            pass_cell_color="$C_DIM"
         fi
     else
-        o_winner="—"
-        o_winner_color="$C_DIM"
+        pass_cell_color="$C_DIM"
+    fi
+    # But ALSO: within a single arm, a non-100% pass rate is a red flag regardless of
+    # the other arm. Show that in the PASS cell color when we'd otherwise render default.
+    if [ "$pass" -lt "$runs" ]; then
+        pass_cell_color="$C_RED"
     fi
 
-    printf "$winners_row_fmt" \
-        "OVERALL (sum)" \
-        "$(format_int "$overall_ctrl")" \
-        "$(format_int "$overall_trt")" \
-        "$o_color" "$o_delta_str" "$C_RESET" \
-        "$o_color" "$o_pct_str" "$C_RESET" \
-        "$o_winner_color" "$o_winner" "$C_RESET"
+    local time_str
+    time_str="$(format_duration "$duration")"
+
+    printf "%-20s %-10s %s%10s%s %s%10s%s %s%11s%s %s%10s%s %s%10s%s %s%7s%s %s%7s%s %s%7s%s\n" \
+        "$scenario" "$arm" \
+        "$c_in"    "$(format_int "$input")"   "$C_RESET" \
+        "$c_out"   "$(format_int "$output")"  "$C_RESET" \
+        "$c_cr"    "$(format_int "$cache_r")" "$C_RESET" \
+        "$c_cc"    "$(format_int "$cache_c")" "$C_RESET" \
+        "$c_cost"  "$(format_cost "$cost")"   "$C_RESET" \
+        "$c_turns" "$turns"                   "$C_RESET" \
+        "$c_time"  "$time_str"                "$C_RESET" \
+        "$pass_cell_color" "${pass}/${runs}"  "$C_RESET"
+
+    # Sub-row: standard deviation for COST and TURNS (dim, only when n>1)
+    # Yellow when coefficient of variation (σ/μ) > 50% — high relative spread.
+    if [ "$runs" -gt 1 ]; then
+        local cost_sd turns_sd cost_sd_color turns_sd_color
+        cost_sd=$(agg_get COST_SD "$scenario" "$arm"); cost_sd=${cost_sd:-0}
+        turns_sd=$(agg_get TURNS_SD "$scenario" "$arm"); turns_sd=${turns_sd:-0}
+        cost_sd_color=$(awk -v sd="$cost_sd" -v m="$cost" \
+            'BEGIN { print (m > 0 && sd/m > 0.5) ? 1 : 0 }')
+        turns_sd_color=$(awk -v sd="$turns_sd" -v m="$turns" \
+            'BEGIN { print (m > 0 && sd/m > 0.5) ? 1 : 0 }')
+        local c_cost_sd="$C_DIM" c_turns_sd="$C_DIM"
+        [ "$cost_sd_color" = "1" ] && c_cost_sd="$C_YELLOW"
+        [ "$turns_sd_color" = "1" ] && c_turns_sd="$C_YELLOW"
+        # Pre-format ± values to exact column widths matching the main row.
+        # ±$X.XXXX = 9 display cols, pad to 10; ±N = variable, pad to 7.
+        local cost_sd_str turns_sd_str
+        cost_sd_str="±$(format_cost "$cost_sd")"
+        turns_sd_str="±${turns_sd}"
+        while [ ${#cost_sd_str} -lt 10 ]; do cost_sd_str=" $cost_sd_str"; done
+        while [ ${#turns_sd_str} -lt 7 ]; do turns_sd_str=" $turns_sd_str"; done
+        printf "%-20s %-10s %10s %10s %11s %10s %s%s%s %s%s%s %7s %7s\n" \
+            "" "" "" "" "" "" \
+            "$c_cost_sd" "$cost_sd_str" "$C_RESET" \
+            "$c_turns_sd" "$turns_sd_str" "$C_RESET" \
+            "" ""
+    fi
+}
+
+for scenario in "${SCENARIOS[@]}"; do
+    print_detail_row "$scenario" "control"
+    print_detail_row "$scenario" "treatment"
+
+    cruns=$(agg_get RUNS "$scenario" control); cruns=${cruns:-0}
+    truns=$(agg_get RUNS "$scenario" treatment); truns=${truns:-0}
+    if [ "$cruns" -gt 0 ] && [ "$truns" -gt 0 ]; then
+        overall_ctrl_cost=$((overall_ctrl_cost + $(agg_get COST "$scenario" control)))
+        overall_trt_cost=$((overall_trt_cost + $(agg_get COST "$scenario" treatment)))
+        overall_ctrl_tokens=$((overall_ctrl_tokens + $(agg_get TOKENS "$scenario" control)))
+        overall_trt_tokens=$((overall_trt_tokens + $(agg_get TOKENS "$scenario" treatment)))
+        overall_ctrl_cached=$((overall_ctrl_cached + $(agg_get CACHED "$scenario" control)))
+        overall_trt_cached=$((overall_trt_cached + $(agg_get CACHED "$scenario" treatment)))
+        overall_ctrl_duration=$((overall_ctrl_duration + $(agg_get DURATION "$scenario" control)))
+        overall_trt_duration=$((overall_trt_duration + $(agg_get DURATION "$scenario" treatment)))
+        overall_ctrl_turns=$((overall_ctrl_turns + $(agg_get TURNS "$scenario" control)))
+        overall_trt_turns=$((overall_trt_turns + $(agg_get TURNS "$scenario" treatment)))
+        overall_ctrl_pass=$((overall_ctrl_pass + $(agg_get PASS "$scenario" control)))
+        overall_trt_pass=$((overall_trt_pass + $(agg_get PASS "$scenario" treatment)))
+        overall_ctrl_runs=$((overall_ctrl_runs + cruns))
+        overall_trt_runs=$((overall_trt_runs + truns))
+    fi
+    printf '\n'
+done
+
+# OVERALL row: sum of per-scenario averages across the scenarios where both
+# arms have data. Uses the same per-metric winner coloring as per-scenario rows.
+if [ "$overall_ctrl_runs" -gt 0 ] && [ "$overall_trt_runs" -gt 0 ]; then
+    printf '%s\n' "$(printf '%.0s-' {1..110})"
+
+    ov_c_cost_color=$(metric_color "$overall_ctrl_cost" "$overall_trt_cost")
+    ov_t_cost_color=$(metric_color "$overall_trt_cost" "$overall_ctrl_cost")
+    ov_c_tok_color=$(metric_color "$overall_ctrl_tokens" "$overall_trt_tokens")
+    ov_t_tok_color=$(metric_color "$overall_trt_tokens" "$overall_ctrl_tokens")
+    ov_c_cached_color=$(metric_color "$overall_ctrl_cached" "$overall_trt_cached")
+    ov_t_cached_color=$(metric_color "$overall_trt_cached" "$overall_ctrl_cached")
+    ov_c_turns_color=$(metric_color "$overall_ctrl_turns" "$overall_trt_turns")
+    ov_t_turns_color=$(metric_color "$overall_trt_turns" "$overall_ctrl_turns")
+    ov_c_dur_color=$(metric_color "$overall_ctrl_duration" "$overall_trt_duration")
+    ov_t_dur_color=$(metric_color "$overall_trt_duration" "$overall_ctrl_duration")
+
+    # Pass coloring mirrors per-scenario logic: red if below 100% for the arm,
+    # otherwise green for the arm with the higher pass rate.
+    if [ "$overall_ctrl_pass" -lt "$overall_ctrl_runs" ]; then
+        ov_c_pass_color="$C_RED"
+    elif [ $((overall_ctrl_pass * overall_trt_runs)) -gt $((overall_trt_pass * overall_ctrl_runs)) ]; then
+        ov_c_pass_color="$C_BOLD$C_GREEN"
+    else
+        ov_c_pass_color=""
+    fi
+    if [ "$overall_trt_pass" -lt "$overall_trt_runs" ]; then
+        ov_t_pass_color="$C_RED"
+    elif [ $((overall_trt_pass * overall_ctrl_runs)) -gt $((overall_ctrl_pass * overall_trt_runs)) ]; then
+        ov_t_pass_color="$C_BOLD$C_GREEN"
+    else
+        ov_t_pass_color=""
+    fi
+
+    # Render OVERALL as two rows using a combined-token column layout.
+    # We reuse the detail_header_fmt but collapse INPUT/OUTPUT into dashes (not
+    # meaningful as sums across different workloads); the meaningful totals are
+    # CACHE_R/CACHE_C/COST/TURNS/TIME/PASS.
+    printf "%-20s %-10s %10s %10s %11s %10s %s%10s%s %s%7s%s %s%7s%s %s%7s%s\n" \
+        "OVERALL (sum)" "control" "-" "-" "-" "-" \
+        "$ov_c_cost_color"   "$(format_cost "$overall_ctrl_cost")"         "$C_RESET" \
+        "$ov_c_turns_color"  "$overall_ctrl_turns"                          "$C_RESET" \
+        "$ov_c_dur_color"    "$(format_duration "$overall_ctrl_duration")"  "$C_RESET" \
+        "$ov_c_pass_color"   "${overall_ctrl_pass}/${overall_ctrl_runs}"    "$C_RESET"
+    printf "%-20s %-10s %10s %10s %11s %10s %s%10s%s %s%7s%s %s%7s%s %s%7s%s\n" \
+        "" "treatment" "-" "-" "-" "-" \
+        "$ov_t_cost_color"   "$(format_cost "$overall_trt_cost")"           "$C_RESET" \
+        "$ov_t_turns_color"  "$overall_trt_turns"                           "$C_RESET" \
+        "$ov_t_dur_color"    "$(format_duration "$overall_trt_duration")"   "$C_RESET" \
+        "$ov_t_pass_color"   "${overall_trt_pass}/${overall_trt_runs}"      "$C_RESET"
+
+    echo ""
+
+    # Compact delta summary beneath the table: call out the headline deltas in
+    # plain English so the reader doesn't have to do the arithmetic.
+    cost_delta=$((overall_trt_cost - overall_ctrl_cost))
+    cost_pct=$(awk -v d="$cost_delta" -v c="$overall_ctrl_cost" \
+        'BEGIN{ if (c==0) print "0.0"; else printf "%.1f", (d/c)*100 }')
+    turns_delta=$((overall_trt_turns - overall_ctrl_turns))
+    turns_pct=$(awk -v d="$turns_delta" -v c="$overall_ctrl_turns" \
+        'BEGIN{ if (c==0) print "0.0"; else printf "%.1f", (d/c)*100 }')
+
+    cost_color="$C_DIM"
+    if [ "$cost_delta" -lt 0 ]; then cost_color="$C_GREEN"
+    elif [ "$cost_delta" -gt 0 ]; then cost_color="$C_RED"
+    fi
+    turns_color="$C_DIM"
+    if [ "$turns_delta" -lt 0 ]; then turns_color="$C_GREEN"
+    elif [ "$turns_delta" -gt 0 ]; then turns_color="$C_RED"
+    fi
+
+    # Pooled std dev for delta = sqrt(sum of per-scenario variances for both arms)
+    all_cost_sds=""
+    all_turns_sds=""
+    for scenario in "${SCENARIOS[@]}"; do
+        cruns=$(agg_get RUNS "$scenario" control); cruns=${cruns:-0}
+        truns=$(agg_get RUNS "$scenario" treatment); truns=${truns:-0}
+        [ "$cruns" -gt 0 ] && [ "$truns" -gt 0 ] || continue
+        all_cost_sds="$all_cost_sds $(agg_get COST_SD "$scenario" control) $(agg_get COST_SD "$scenario" treatment)"
+        all_turns_sds="$all_turns_sds $(agg_get TURNS_SD "$scenario" control) $(agg_get TURNS_SD "$scenario" treatment)"
+    done
+    delta_cost_sd=$(echo "$all_cost_sds" | awk '{
+        ss = 0; for (i=1; i<=NF; i++) ss += $i * $i
+        printf "%d", int(sqrt(ss) + 0.5)
+    }')
+    delta_turns_sd=$(echo "$all_turns_sds" | awk '{
+        ss = 0; for (i=1; i<=NF; i++) ss += $i * $i
+        printf "%d", int(sqrt(ss) + 0.5)
+    }')
+
+    printf '  Δ cost  (trt − ctrl): %s%s (%s%%) ± %s%s\n' \
+        "$cost_color" "$(format_cost "$cost_delta")" "$cost_pct" \
+        "$(format_cost "$delta_cost_sd")" "$C_RESET"
+    printf '  Δ turns (trt − ctrl): %s%s (%s%%) ± %s%s\n' \
+        "$turns_color" "$turns_delta" "$turns_pct" \
+        "$delta_turns_sd" "$C_RESET"
 fi
 
 echo ""
 
 # ---------------------------------------------------------------------------
-# Render: DETAIL table (per-arm, with TIME column; TOTAL = all-billable)
+# Outlier warnings (>2σ from mean) — included in stats but flagged here
 # ---------------------------------------------------------------------------
-printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
-printf '%s%s%s\n' "$C_BOLD$C_CYAN" "  Detail (averages across runs)" "$C_RESET"
-printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
-echo ""
-
-printf "%-22s %-10s %10s %10s %10s %10s %12s %6s %8s %8s\n" \
-    "SCENARIO" "ARM" "IN_TOK" "OUT_TOK" "CACHE_R" "CACHE_C" "TOTAL" "TOOLS" "TIME" "PASS"
-printf '%s\n' "$(printf '%.0s-' {1..116})"
-
-for scenario in "${SCENARIOS[@]}"; do
-    for arm in "${ARMS[@]}"; do
-        runs=$(agg_get RUNS "$scenario" "$arm"); runs=${runs:-0}
-        if [ "$runs" -eq 0 ]; then
-            printf "%-22s %-10s %10s %10s %10s %10s %12s %6s %8s %8s\n" \
-                "$scenario" "$arm" "-" "-" "-" "-" "-" "-" "-" "-"
-            continue
-        fi
-
-        pass=$(agg_get PASS "$scenario" "$arm"); pass=${pass:-0}
-        if [ "$pass" -eq "$runs" ]; then
-            pass_color="$C_GREEN"
-        else
-            pass_color="$C_RED"
-        fi
-
-        time_str="$(format_duration "$(agg_get DURATION "$scenario" "$arm")")"
-
-        printf "%-22s %-10s %10s %10s %10s %10s %12s %6d %8s %s%5s%s\n" \
-            "$scenario" "$arm" \
-            "$(format_int "$(agg_get INPUT    "$scenario" "$arm")")" \
-            "$(format_int "$(agg_get OUTPUT   "$scenario" "$arm")")" \
-            "$(format_int "$(agg_get CACHE_R  "$scenario" "$arm")")" \
-            "$(format_int "$(agg_get CACHE_C  "$scenario" "$arm")")" \
-            "$(format_int "$(agg_get TOTAL    "$scenario" "$arm")")" \
-            "$(agg_get TOOLS "$scenario" "$arm")" \
-            "$time_str" \
-            "$pass_color" "${pass}/${runs}" "$C_RESET"
-    done
-done
-
-echo ""
-printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
-printf '%s%s%s\n' "$C_BOLD$C_CYAN" "  Summary (averaged across all scenarios)" "$C_RESET"
-printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
-echo ""
-
-# Aggregate per-arm means from the per-(scenario,arm) aggregates already computed.
-for arm in "${ARMS[@]}"; do
-    grand_input=0
-    grand_output=0
-    grand_total=0
-    grand_tools=0
-    grand_duration=0
-    grand_pass=0
-    grand_total_runs=0
-    scenario_count=0
-
-    for scenario in "${SCENARIOS[@]}"; do
-        runs=$(agg_get RUNS "$scenario" "$arm"); runs=${runs:-0}
-        [ "$runs" -gt 0 ] || continue
-
-        grand_input=$((grand_input + $(agg_get INPUT "$scenario" "$arm")))
-        grand_output=$((grand_output + $(agg_get OUTPUT "$scenario" "$arm")))
-        grand_total=$((grand_total + $(agg_get TOTAL "$scenario" "$arm")))
-        grand_tools=$((grand_tools + $(agg_get TOOLS "$scenario" "$arm")))
-        grand_duration=$((grand_duration + $(agg_get DURATION "$scenario" "$arm")))
-        _p=$(agg_get PASS "$scenario" "$arm"); grand_pass=$((grand_pass + ${_p:-0}))
-        grand_total_runs=$((grand_total_runs + runs))
-        scenario_count=$((scenario_count + 1))
-    done
-
-    if [ "$scenario_count" -gt 0 ]; then
-        avg_input=$((grand_input / scenario_count))
-        avg_output=$((grand_output / scenario_count))
-        avg_total=$((grand_total / scenario_count))
-        avg_tools=$((grand_tools / scenario_count))
-        avg_duration=$((grand_duration / scenario_count))
-
-        if [ "$grand_pass" -eq "$grand_total_runs" ]; then
-            pass_color="$C_GREEN"
-        else
-            pass_color="$C_RED"
-        fi
-
-        printf '%s%s:%s\n' "$C_BOLD" "$arm" "$C_RESET"
-        printf "  Avg input tokens/scenario:       %s\n"    "$(format_int "$avg_input")"
-        printf "  Avg output tokens/scenario:      %s\n"    "$(format_int "$avg_output")"
-        printf "  Avg all-billable tokens/scen.:   %s\n"    "$(format_int "$avg_total")"
-        printf "  Avg tool calls/scenario:         %s\n"    "$avg_tools"
-        printf "  Avg wall time/scenario:          %s\n"    "$(format_duration "$avg_duration")"
-        printf "  Verification pass rate:          %s%s/%s%s\n" "$pass_color" "$grand_pass" "$grand_total_runs" "$C_RESET"
-        echo ""
-    fi
-done
+if [ -n "$outlier_warnings" ]; then
+    printf '%s%s%s\n' "$C_BOLD$C_YELLOW" "============================================" "$C_RESET"
+    printf '%s%s%s\n' "$C_BOLD$C_YELLOW" "  Outlier Warnings (>2σ, included in stats)" "$C_RESET"
+    printf '%s%s%s\n' "$C_BOLD$C_YELLOW" "============================================" "$C_RESET"
+    echo ""
+    printf '%s%-20s %-12s %-30s %-8s %s%s\n' "$C_YELLOW" "SCENARIO" "ARM" "RUN" "METRIC" "VALUE" "$C_RESET"
+    printf '%s\n' "$(printf '%.0s-' {1..85})"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        read -r scn arm run metric val <<< "$line"
+        printf '%s%-20s %-12s %-30s %-8s %s%s\n' "$C_YELLOW" "$scn" "$arm" "$run" "$metric" "$val" "$C_RESET"
+    done <<< "$outlier_warnings"
+    echo ""
+fi
 
 printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
 printf '%s%s%s\n' "$C_BOLD$C_CYAN" "  Tool Breakdown (per scenario, latest run)" "$C_RESET"

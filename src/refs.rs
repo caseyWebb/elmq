@@ -14,17 +14,51 @@ pub struct RefMatch {
     pub text: Option<String>,
 }
 
+// Test-only per-thread counter incremented once per project file parsed
+// during a `find_refs`/`find_refs_batch` invocation. Used by the
+// single-walk regression guard to assert each project file is parsed at
+// most once per batch, regardless of how many declaration names are being
+// searched. Thread-local so concurrent test runs do not interfere.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn bump_parse_count() {
+    PARSE_COUNT.with(|c| c.set(c.get() + 1));
+}
+
+#[cfg(not(test))]
+#[inline]
+fn bump_parse_count() {}
+
 /// Find all references to a module (and optionally a specific declaration) across a project.
+///
+/// This is a thin wrapper around [`find_refs_batch`]: `None` routes to a
+/// module-level report, and `Some(name)` delegates to the batched entry with
+/// a one-element slice so the single-walk invariant holds uniformly.
 pub fn find_refs(
     project: &Project,
     target_module: &str,
     declaration: Option<&str>,
 ) -> Result<Vec<RefMatch>> {
+    match declaration {
+        None => find_refs_module_level(project, target_module),
+        Some(name) => {
+            let batch = find_refs_batch(project, target_module, &[name])?;
+            Ok(batch.into_iter().next().unwrap_or_default())
+        }
+    }
+}
+
+/// Module-level refs: report the import line in every project file that
+/// imports the target module.
+fn find_refs_module_level(project: &Project, target_module: &str) -> Result<Vec<RefMatch>> {
     let elm_files = project.elm_files()?;
     let mut matches = Vec::new();
 
     for elm_file in &elm_files {
-        // Skip the target module's own file.
         if let Ok(module_name) = project.module_name(elm_file)
             && module_name == target_module
         {
@@ -33,6 +67,7 @@ pub fn find_refs(
 
         let source = std::fs::read_to_string(elm_file)
             .with_context(|| format!("could not read {}", elm_file.display()))?;
+        bump_parse_count();
 
         let tree = match parser::parse(&source) {
             Ok(t) => t,
@@ -41,7 +76,57 @@ pub fn find_refs(
 
         let root = tree.root_node();
         let import_info = parse_imports(&root, &source, target_module);
+        if import_info.is_none() {
+            continue;
+        }
+        let import_info = import_info.unwrap();
 
+        matches.push(RefMatch {
+            file: relative_display(elm_file, &project.root),
+            line: import_info.import_line,
+            text: None,
+        });
+    }
+
+    matches.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+    Ok(matches)
+}
+
+/// Find references to multiple declarations of the same target module in a
+/// single project walk. Returns one `Vec<RefMatch>` per input name, in input
+/// order. Each project file is read and parsed at most once regardless of
+/// the number of names — this is load-bearing for batch `refs` performance
+/// (see `openspec/specs/references/spec.md`).
+pub fn find_refs_batch(
+    project: &Project,
+    target_module: &str,
+    names: &[&str],
+) -> Result<Vec<Vec<RefMatch>>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let elm_files = project.elm_files()?;
+    let mut per_name: Vec<Vec<RefMatch>> = vec![Vec::new(); names.len()];
+
+    for elm_file in &elm_files {
+        if let Ok(module_name) = project.module_name(elm_file)
+            && module_name == target_module
+        {
+            continue;
+        }
+
+        let source = std::fs::read_to_string(elm_file)
+            .with_context(|| format!("could not read {}", elm_file.display()))?;
+        bump_parse_count();
+
+        let tree = match parser::parse(&source) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        let root = tree.root_node();
+        let import_info = parse_imports(&root, &source, target_module);
         if import_info.is_none() {
             continue;
         }
@@ -49,30 +134,23 @@ pub fn find_refs(
 
         let display_path = relative_display(elm_file, &project.root);
 
-        match declaration {
-            None => {
-                // Module-level: report the import line.
-                matches.push(RefMatch {
-                    file: display_path,
-                    line: import_info.import_line,
-                    text: None,
-                });
-            }
-            Some(decl_name) => {
-                collect_declaration_refs(
-                    &root,
-                    &source,
-                    &import_info,
-                    decl_name,
-                    &display_path,
-                    &mut matches,
-                );
-            }
+        for (i, name) in names.iter().enumerate() {
+            collect_declaration_refs(
+                &root,
+                &source,
+                &import_info,
+                name,
+                &display_path,
+                &mut per_name[i],
+            );
         }
     }
 
-    matches.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
-    Ok(matches)
+    for matches in &mut per_name {
+        matches.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+    }
+
+    Ok(per_name)
 }
 
 /// Information about how a target module is imported in a file.
@@ -476,5 +554,84 @@ mod tests {
 
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].line, 5);
+    }
+
+    #[test]
+    fn test_batch_basic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        create_test_project(root, &["src"]);
+
+        write_elm(
+            root,
+            "src/Lib/Utils.elm",
+            "module Lib.Utils exposing (helper, other)\n\nhelper = 1\n\nother = 2\n",
+        );
+        write_elm(
+            root,
+            "src/Main.elm",
+            "module Main exposing (..)\n\nimport Lib.Utils\n\nmain = Lib.Utils.helper\nalt = Lib.Utils.other\n",
+        );
+
+        let project = Project::discover(root).unwrap();
+        let batch = find_refs_batch(&project, "Lib.Utils", &["helper", "other"]).unwrap();
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].len(), 1);
+        assert_eq!(batch[0][0].text.as_deref(), Some("main = Lib.Utils.helper"));
+        assert_eq!(batch[1].len(), 1);
+        assert_eq!(batch[1][0].text.as_deref(), Some("alt = Lib.Utils.other"));
+    }
+
+    /// Single-walk regression guard: a batched `find_refs_batch` invocation
+    /// SHALL parse each project file at most once, regardless of how many
+    /// declaration names are being searched. This is a load-bearing
+    /// performance contract captured as a normative requirement in
+    /// `openspec/specs/references/spec.md`.
+    #[test]
+    fn test_batch_single_walk_guard() {
+        // PARSE_COUNT is thread-local; reset before we measure so concurrent
+        // test threads don't interfere.
+        PARSE_COUNT.with(|c| c.set(0));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        create_test_project(root, &["src"]);
+
+        write_elm(
+            root,
+            "src/Lib/Utils.elm",
+            "module Lib.Utils exposing (a, b, c, d, e)\n\na = 1\n\nb = 2\n\nc = 3\n\nd = 4\n\ne = 5\n",
+        );
+        // Three project files that all reference the target module.
+        write_elm(
+            root,
+            "src/Main.elm",
+            "module Main exposing (..)\n\nimport Lib.Utils\n\nx = Lib.Utils.a\n",
+        );
+        write_elm(
+            root,
+            "src/Other.elm",
+            "module Other exposing (..)\n\nimport Lib.Utils\n\ny = Lib.Utils.b\n",
+        );
+        write_elm(
+            root,
+            "src/Third.elm",
+            "module Third exposing (..)\n\nimport Lib.Utils\n\nz = Lib.Utils.c\n",
+        );
+
+        let project = Project::discover(root).unwrap();
+        // Four project files total (Lib/Utils.elm + three callers). The
+        // target's own file is skipped inside the walk, so 3 files should
+        // be parsed.
+        let expected_parses = 3;
+
+        let _ = find_refs_batch(&project, "Lib.Utils", &["a", "b", "c", "d", "e"]).unwrap();
+        let count = PARSE_COUNT.with(|c| c.get());
+        assert_eq!(
+            count, expected_parses,
+            "batch refs with 5 names parsed project files {count} times; \
+             expected exactly {expected_parses} (one per non-target file)"
+        );
     }
 }
