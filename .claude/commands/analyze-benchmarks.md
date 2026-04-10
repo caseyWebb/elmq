@@ -19,6 +19,10 @@ Results live in `benchmarks/results/{control,treatment}/<run-id>/<scenario>/`. E
 
 ## Analysis steps
 
+### 0. Run the analysis script
+
+First, run `./benchmarks/analyze.sh --no-color ./benchmarks/results` to get deterministic statistics: per-scenario averages, standard deviations, outlier warnings (>2σ), and overall deltas with uncertainty. Include this output in your report as the quantitative baseline — do not re-derive these numbers manually.
+
 ### 1. Inventory available runs
 
 Use Bash to list what's in `benchmarks/results/`. Apply the user's filter from $ARGUMENTS if provided. Summarize: how many runs per arm, which scenarios have data.

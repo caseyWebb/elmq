@@ -107,6 +107,42 @@ format_cost() {
     awk -v m="$micros" 'BEGIN { printf "$%.4f", m/1000000 }'
 }
 
+# Compute sample standard deviation from space-separated values.
+# Usage: echo "v1 v2 v3" | compute_stddev
+# Returns integer (rounded). For n<=1, returns 0.
+compute_stddev() {
+    awk '{
+        n = NF
+        if (n <= 1) { print 0; exit }
+        sum = 0
+        for (i = 1; i <= n; i++) sum += $i
+        mean = sum / n
+        ss = 0
+        for (i = 1; i <= n; i++) ss += ($i - mean)^2
+        printf "%d", int(sqrt(ss / (n - 1)) + 0.5)
+    }'
+}
+
+# Find outliers (>2σ from mean). Takes space-separated values.
+# Prints "index:value" for each outlier (1-indexed). Empty output = no outliers.
+find_outliers() {
+    awk '{
+        n = NF
+        if (n <= 2) exit
+        sum = 0
+        for (i = 1; i <= n; i++) sum += $i
+        mean = sum / n
+        ss = 0
+        for (i = 1; i <= n; i++) ss += ($i - mean)^2
+        sd = sqrt(ss / (n - 1))
+        if (sd == 0) exit
+        for (i = 1; i <= n; i++) {
+            if ( ($i - mean) > 2*sd || (mean - $i) > 2*sd )
+                printf "%d:%s\n", i, $i
+        }
+    }'
+}
+
 # Pick a color based on whether $1 beats $2. Lower wins by default; pass reverse=1 for
 # metrics where higher is better (e.g. PASS counts). Returns bold-green for a win,
 # empty (default) for a loss, and dim for ties or missing opponents.
@@ -209,6 +245,9 @@ for scenario in "${SCENARIOS[@]}"; do
         total_duration=0
         pass_count=0
         run_count=0
+        cost_vals=""
+        turns_vals=""
+        run_names=""
 
         for run_dir in "$arm_dir"/*/; do
             [ -d "$run_dir" ] || continue
@@ -231,6 +270,11 @@ for scenario in "${SCENARIOS[@]}"; do
             total_duration=$((total_duration + duration_ms))
             total_turns=$((total_turns + turns))
 
+            run_cost="$(compute_cost_micros "$input" "$output" "$cache_read" "$cache_create")"
+            cost_vals="$cost_vals $run_cost"
+            turns_vals="$turns_vals $turns"
+            run_names="$run_names $(basename "$run_dir")"
+
             tools="$(count_tool_calls "$session_file")"
             total_tools=$((total_tools + tools))
 
@@ -244,6 +288,12 @@ for scenario in "${SCENARIOS[@]}"; do
         if [ "$run_count" -eq 0 ]; then
             continue
         fi
+
+        agg_set COST_VALS  "$scenario" "$arm" "$cost_vals"
+        agg_set TURNS_VALS "$scenario" "$arm" "$turns_vals"
+        agg_set RUN_NAMES  "$scenario" "$arm" "$run_names"
+        agg_set COST_SD    "$scenario" "$arm" "$(echo "$cost_vals" | compute_stddev)"
+        agg_set TURNS_SD   "$scenario" "$arm" "$(echo "$turns_vals" | compute_stddev)"
 
         avg_input=$((total_input / run_count))
         avg_output=$((total_output / run_count))
@@ -261,6 +311,44 @@ for scenario in "${SCENARIOS[@]}"; do
         agg_set TURNS    "$scenario" "$arm" $((total_turns / run_count))
         agg_set DURATION "$scenario" "$arm" $((total_duration / run_count))
         agg_set PASS     "$scenario" "$arm" "$pass_count"
+    done
+done
+
+# ---------------------------------------------------------------------------
+# Phase 2: detect outliers (>2σ from mean) — warn but still include in stats
+# ---------------------------------------------------------------------------
+outlier_warnings=""
+for scenario in "${SCENARIOS[@]}"; do
+    for arm in "${ARMS[@]}"; do
+        runs=$(agg_get RUNS "$scenario" "$arm"); runs=${runs:-0}
+        [ "$runs" -le 2 ] && continue
+
+        cost_vals=$(agg_get COST_VALS "$scenario" "$arm")
+        turns_vals=$(agg_get TURNS_VALS "$scenario" "$arm")
+        run_names_str=$(agg_get RUN_NAMES "$scenario" "$arm")
+
+        # Convert run_names to an array for index lookup
+        read -ra _rn_arr <<< "$run_names_str"
+
+        cost_outliers=$(echo "$cost_vals" | find_outliers)
+        turns_outliers=$(echo "$turns_vals" | find_outliers)
+
+        if [ -n "$cost_outliers" ]; then
+            while IFS=: read -r idx val; do
+                [ -z "$idx" ] && continue
+                rname="${_rn_arr[$((idx-1))]:-run#$idx}"
+                outlier_warnings="${outlier_warnings}${scenario} ${arm} ${rname} COST $(format_cost "$val")
+"
+            done <<< "$cost_outliers"
+        fi
+        if [ -n "$turns_outliers" ]; then
+            while IFS=: read -r idx val; do
+                [ -z "$idx" ] && continue
+                rname="${_rn_arr[$((idx-1))]:-run#$idx}"
+                outlier_warnings="${outlier_warnings}${scenario} ${arm} ${rname} TURNS ${val}
+"
+            done <<< "$turns_outliers"
+        fi
     done
 done
 
@@ -389,6 +477,18 @@ print_detail_row() {
         "$c_turns" "$turns"                   "$C_RESET" \
         "$c_time"  "$time_str"                "$C_RESET" \
         "$pass_cell_color" "${pass}/${runs}"  "$C_RESET"
+
+    # Sub-row: standard deviation for COST and TURNS (dim, only when n>1)
+    if [ "$runs" -gt 1 ]; then
+        local cost_sd turns_sd
+        cost_sd=$(agg_get COST_SD "$scenario" "$arm"); cost_sd=${cost_sd:-0}
+        turns_sd=$(agg_get TURNS_SD "$scenario" "$arm"); turns_sd=${turns_sd:-0}
+        printf "%-20s %-10s %10s %10s %11s %10s %s%10s%s %s%7s%s %7s %7s\n" \
+            "" "" "" "" "" "" \
+            "$C_DIM" "±$(format_cost "$cost_sd")" "$C_RESET" \
+            "$C_DIM" "±${turns_sd}" "$C_RESET" \
+            "" ""
+    fi
 }
 
 for scenario in "${SCENARIOS[@]}"; do
@@ -486,16 +586,52 @@ if [ "$overall_ctrl_runs" -gt 0 ] && [ "$overall_trt_runs" -gt 0 ]; then
     elif [ "$turns_delta" -gt 0 ]; then turns_color="$C_RED"
     fi
 
-    printf '  Δ cost  (trt − ctrl): %s%s (%s%%)%s\n' \
-        "$cost_color" "$(format_cost "$cost_delta")" "$cost_pct" "$C_RESET"
-    printf '  Δ turns (trt − ctrl): %s%s (%s%%)%s\n' \
-        "$turns_color" "$turns_delta" "$turns_pct" "$C_RESET"
+    # Pooled std dev for delta = sqrt(sum of per-scenario variances for both arms)
+    all_cost_sds=""
+    all_turns_sds=""
+    for scenario in "${SCENARIOS[@]}"; do
+        cruns=$(agg_get RUNS "$scenario" control); cruns=${cruns:-0}
+        truns=$(agg_get RUNS "$scenario" treatment); truns=${truns:-0}
+        [ "$cruns" -gt 0 ] && [ "$truns" -gt 0 ] || continue
+        all_cost_sds="$all_cost_sds $(agg_get COST_SD "$scenario" control) $(agg_get COST_SD "$scenario" treatment)"
+        all_turns_sds="$all_turns_sds $(agg_get TURNS_SD "$scenario" control) $(agg_get TURNS_SD "$scenario" treatment)"
+    done
+    delta_cost_sd=$(echo "$all_cost_sds" | awk '{
+        ss = 0; for (i=1; i<=NF; i++) ss += $i * $i
+        printf "%d", int(sqrt(ss) + 0.5)
+    }')
+    delta_turns_sd=$(echo "$all_turns_sds" | awk '{
+        ss = 0; for (i=1; i<=NF; i++) ss += $i * $i
+        printf "%d", int(sqrt(ss) + 0.5)
+    }')
+
+    printf '  Δ cost  (trt − ctrl): %s%s (%s%%) ± %s%s\n' \
+        "$cost_color" "$(format_cost "$cost_delta")" "$cost_pct" \
+        "$(format_cost "$delta_cost_sd")" "$C_RESET"
+    printf '  Δ turns (trt − ctrl): %s%s (%s%%) ± %s%s\n' \
+        "$turns_color" "$turns_delta" "$turns_pct" \
+        "$delta_turns_sd" "$C_RESET"
 fi
 
 echo ""
-# The standalone "Summary" block that used to live here duplicated the OVERALL
-# row in the detail table (and still referenced the misleading all-billable
-# total). The detail table + its OVERALL row are now the single headline view.
+
+# ---------------------------------------------------------------------------
+# Outlier warnings (>2σ from mean) — included in stats but flagged here
+# ---------------------------------------------------------------------------
+if [ -n "$outlier_warnings" ]; then
+    printf '%s%s%s\n' "$C_BOLD$C_YELLOW" "============================================" "$C_RESET"
+    printf '%s%s%s\n' "$C_BOLD$C_YELLOW" "  Outlier Warnings (>2σ, included in stats)" "$C_RESET"
+    printf '%s%s%s\n' "$C_BOLD$C_YELLOW" "============================================" "$C_RESET"
+    echo ""
+    printf '%s%-20s %-12s %-30s %-8s %s%s\n' "$C_YELLOW" "SCENARIO" "ARM" "RUN" "METRIC" "VALUE" "$C_RESET"
+    printf '%s\n' "$(printf '%.0s-' {1..85})"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        read -r scn arm run metric val <<< "$line"
+        printf '%s%-20s %-12s %-30s %-8s %s%s\n' "$C_YELLOW" "$scn" "$arm" "$run" "$metric" "$val" "$C_RESET"
+    done <<< "$outlier_warnings"
+    echo ""
+fi
 
 printf '%s%s%s\n' "$C_BOLD$C_CYAN" "============================================" "$C_RESET"
 printf '%s%s%s\n' "$C_BOLD$C_CYAN" "  Tool Breakdown (per scenario, latest run)" "$C_RESET"
