@@ -33,6 +33,7 @@ $ elmq get src/Api.elm fetchUsers
 
 - `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. Add `--docs` for doc comments. Accepts one or more files in a single call.
 - `elmq get <file> <name...>` — full source of one or more declarations from the same file.
+- `elmq get -f <file> <name...> [-f <file> <name...> ...]` — read declarations across multiple files in one call. Each `-f` group is a file followed by one or more names. Output frames each block as `## Module.decl` (or `## file:decl` without `elm.json`). Use this after `elmq list` on several files: list, pick the decls you need, then fetch them all in one `get -f` call instead of N separate calls.
 - `elmq refs <file>` — every project file that imports this module.
 - `elmq refs <file> <name...>` — every project reference to one or more declarations in this file.
 

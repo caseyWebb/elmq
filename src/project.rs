@@ -161,6 +161,14 @@ impl Project {
         Ok(module_name)
     }
 
+    /// Resolve a file path to its Elm module name, returning `None` when no
+    /// `elm.json` is discoverable. Convenience wrapper used by multi-file `get`
+    /// and `grep --source` for output framing.
+    pub fn resolve_module_for_file(file: &Path) -> Option<String> {
+        let project = Self::try_discover(file).ok()??;
+        project.module_name(file).ok()
+    }
+
     /// List all .elm files across all source directories.
     pub fn elm_files(&self) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();

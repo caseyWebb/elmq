@@ -92,6 +92,14 @@ update msg model =
 
 Includes doc comments and type annotations when present. Returns non-zero exit code if the declaration is not found.
 
+Read across multiple files in one call with `-f`:
+
+```sh
+elmq get -f src/Page/Home.elm update view -f src/Update.elm main
+```
+
+Each `-f` group is a file followed by one or more names. Output is framed as `## Module.decl` blocks (falls back to `## file:decl` without `elm.json`).
+
 ### Upsert a declaration
 
 ```sh

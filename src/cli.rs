@@ -25,13 +25,30 @@ pub enum Command {
         docs: bool,
     },
     /// Extract the full source of one or more declarations by name
+    ///
+    /// Two forms:
+    ///   elmq get <FILE> <NAME>...           bare positional (single file)
+    ///   elmq get -f <FILE> <NAME>... [-f …] grouped multi-file
+    ///
+    /// The forms are mutually exclusive; mixing positionals with -f is a usage
+    /// error. Each -f group takes a file path followed by one or more names.
     Get {
-        /// Path to the Elm file
-        file: PathBuf,
+        /// Path to the Elm file (bare positional form; omit when using -f)
+        file: Option<PathBuf>,
 
-        /// Names of declarations to extract (one or more)
-        #[arg(num_args = 1.., required = true)]
+        /// Names of declarations to extract (bare positional form; omit when using -f)
+        #[arg(num_args = 0..)]
         names: Vec<String>,
+
+        // Design note (task 1.2): clap derive cannot represent per-occurrence
+        // value groups directly — Vec<Vec<String>> is not supported because
+        // Vec<String> doesn't implement FromStr. We store the flat
+        // concatenation here and recover occurrence boundaries via
+        // ArgMatches::get_occurrences in main.rs. The derive field exists
+        // so clap generates correct help text and validates num_args.
+        /// File group: -f <FILE> <NAME>... (repeatable for multi-file reads)
+        #[arg(short = 'f', long = "file", num_args = 2.., action = clap::ArgAction::Append)]
+        from: Vec<String>,
 
         /// Output format
         #[arg(long, value_enum, default_value_t = Format::Compact)]

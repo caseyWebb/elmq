@@ -1,8 +1,8 @@
 mod cli;
 mod framing;
 
-use anyhow::{Context, Result};
-use clap::Parser;
+use anyhow::{Context, Result, bail};
+use clap::{CommandFactory, FromArgMatches};
 use cli::{Cli, Command, Format, GrepFormat, ImportCommand, VariantCommand};
 use elmq::parser;
 use elmq::project;
@@ -51,19 +51,44 @@ fn main() {
 }
 
 fn run() -> i32 {
-    // Override clap's default usage-error exit code (2) to 1, so the
-    // spec-mandated distinction between usage errors (1) and per-argument
-    // processing failures (2) is preserved. Clap's error rendering still
-    // goes to stderr.
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
+    // Parse via ArgMatches so we can recover per-occurrence grouping for -f
+    // (see cli.rs design note on task 1.2). We still derive the Cli struct
+    // from the same matches for all other commands.
+    let matches = match Cli::command().try_get_matches() {
+        Ok(m) => m,
         Err(e) => {
             let _ = e.print();
             return 1;
         }
     };
 
-    match run_command(cli) {
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+
+    // Extract -f occurrence groups for the Get subcommand. Each occurrence
+    // of -f with num_args=2.. produces one group of values; we split each
+    // into (file, names).
+    let file_groups = matches
+        .subcommand_matches("get")
+        .and_then(|sub| {
+            sub.get_occurrences::<String>("from").map(|occ| {
+                occ.map(|vals| {
+                    let vals: Vec<&String> = vals.collect();
+                    let file = PathBuf::from(&vals[0]);
+                    let names: Vec<String> = vals[1..].iter().map(|s| (*s).clone()).collect();
+                    (file, names)
+                })
+                .collect::<Vec<_>>()
+            })
+        })
+        .unwrap_or_default();
+
+    match run_command(cli, file_groups) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("error: {e:#}");
@@ -72,7 +97,7 @@ fn run() -> i32 {
     }
 }
 
-fn run_command(cli: Cli) -> Result<i32> {
+fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32> {
     match cli.command {
         Command::List {
             files,
@@ -83,8 +108,28 @@ fn run_command(cli: Cli) -> Result<i32> {
         Command::Get {
             file,
             names,
+            from: _,
             format,
-        } => run_get(file, names, format),
+        } => {
+            // Mutual exclusion (task 1.3): bare positionals vs -f groups.
+            let has_bare = file.is_some() || !names.is_empty();
+            let has_grouped = !file_groups.is_empty();
+
+            if has_bare && has_grouped {
+                bail!("cannot mix bare positional arguments with -f/--file groups");
+            }
+
+            if has_grouped {
+                run_get_multi(file_groups, format)
+            } else if let Some(file) = file {
+                if names.is_empty() {
+                    bail!("at least one declaration name is required");
+                }
+                run_get(file, names, format)
+            } else {
+                bail!("either provide <FILE> <NAME>... or use -f <FILE> <NAME>...");
+            }
+        }
 
         Command::Set { file, name } => {
             let (source, summary) = load_and_parse(&file)?;
@@ -519,6 +564,215 @@ fn run_get(file: PathBuf, names: Vec<String>, format: Format) -> Result<i32> {
     let (out, code) = format_results(&entries);
     print!("{out}");
     Ok(code)
+}
+
+// ---------------- get (multi-file) ----------------
+
+/// A parsed and cached file, keyed by canonical path.
+struct ParsedFile {
+    summary: FileSummary,
+    source_lines: Vec<String>,
+}
+
+fn run_get_multi(groups: Vec<(PathBuf, Vec<String>)>, format: Format) -> Result<i32> {
+    use std::collections::HashMap;
+
+    // Cache: canonical path → parsed file. Each file is read and parsed at
+    // most once regardless of how many -f groups reference it (task 3.2).
+    let mut cache: HashMap<PathBuf, Result<ParsedFile, String>> = HashMap::new();
+
+    // Project discovery happens at most once (task 2.3). Try from the first
+    // file; None means no elm.json was found.
+    let project = groups
+        .first()
+        .and_then(|(file, _)| project::Project::try_discover(file).ok().flatten());
+
+    // Build module-name map for all files. Detect collisions (task 2.2):
+    // two files resolving to the same module name is an error for both.
+    let mut module_for_file: HashMap<PathBuf, Result<Option<String>, String>> = HashMap::new();
+    if let Some(ref proj) = project {
+        let mut module_to_file: HashMap<String, PathBuf> = HashMap::new();
+        for (file, _) in &groups {
+            let canonical = file.canonicalize().unwrap_or_else(|_| file.clone());
+            if module_for_file.contains_key(&canonical) {
+                continue;
+            }
+            match proj.module_name(&canonical) {
+                Ok(module) => {
+                    if let Some(prev_file) = module_to_file.get(&module) {
+                        // Collision: mark both as errors.
+                        let msg =
+                            format!("ambiguous module resolution for {}", canonical.display());
+                        module_for_file.insert(canonical, Err(msg.clone()));
+                        let prev_msg =
+                            format!("ambiguous module resolution for {}", prev_file.display());
+                        module_for_file.insert(prev_file.clone(), Err(prev_msg));
+                    } else {
+                        module_to_file.insert(module.clone(), canonical.clone());
+                        module_for_file.insert(canonical, Ok(Some(module)));
+                    }
+                }
+                Err(_) => {
+                    module_for_file.insert(canonical, Ok(None));
+                }
+            }
+        }
+    }
+
+    // Flatten groups into (header, result) entries in input order (task 3.3).
+    let mut entries: Vec<(String, ItemResult)> = Vec::new();
+
+    for (file, names) in &groups {
+        let canonical = file.canonicalize().unwrap_or_else(|_| file.clone());
+
+        // Resolve the header prefix: Module name or file path.
+        let header_prefix: Result<String, String> =
+            if let Some(res) = module_for_file.get(&canonical) {
+                match res {
+                    Ok(Some(module)) => Ok(module.clone()),
+                    Ok(None) => Ok(file.display().to_string()),
+                    Err(msg) => Err(msg.clone()),
+                }
+            } else {
+                // No project discovered — fallback to file path.
+                Ok(file.display().to_string())
+            };
+
+        // Build the header for a given name.
+        let make_header = |name: &str| -> String {
+            match &header_prefix {
+                Ok(prefix) => {
+                    if project.is_some()
+                        && module_for_file
+                            .get(&canonical)
+                            .is_some_and(|r| matches!(r, Ok(Some(_))))
+                    {
+                        // Module.decl form
+                        format!("{prefix}.{name}")
+                    } else {
+                        // file:decl fallback
+                        format!("{prefix}:{name}")
+                    }
+                }
+                Err(_) => {
+                    // Collision — still need a header, use file:name.
+                    format!("{}:{name}", file.display())
+                }
+            }
+        };
+
+        // If the header prefix is an error (module collision), propagate it
+        // to all names in the group (task 3.4).
+        if let Err(ref msg) = header_prefix {
+            for name in names {
+                entries.push((make_header(name), Err(msg.clone())));
+            }
+            continue;
+        }
+
+        // Ensure file is in the cache.
+        if !cache.contains_key(&canonical) {
+            let parsed = match load_and_parse(&canonical) {
+                Ok((source, summary)) => {
+                    let source_lines = source.lines().map(String::from).collect();
+                    Ok(ParsedFile {
+                        summary,
+                        source_lines,
+                    })
+                }
+                Err(e) => Err(err_to_line(&e)),
+            };
+            cache.insert(canonical.clone(), parsed);
+        }
+
+        let parsed = cache.get(&canonical).unwrap();
+        match parsed {
+            Ok(pf) => {
+                for name in names {
+                    let header = make_header(name);
+                    let result: ItemResult = match pf.summary.find_declaration(name) {
+                        Some(decl) => {
+                            let start = decl.start_line - 1;
+                            let end = decl.end_line.min(pf.source_lines.len());
+                            let decl_source = pf.source_lines[start..end].join("\n");
+                            match format {
+                                Format::Compact => Ok(format!("{decl_source}\n")),
+                                Format::Json => format_get_json_multi(
+                                    decl,
+                                    &decl_source,
+                                    &file.display().to_string(),
+                                    module_for_file
+                                        .get(&canonical)
+                                        .and_then(|r| r.as_ref().ok())
+                                        .and_then(|o| o.as_deref()),
+                                )
+                                .map_err(|e| err_to_line(&e)),
+                            }
+                        }
+                        None => Err(format!("declaration '{name}' not found")),
+                    };
+                    entries.push((header, result));
+                }
+            }
+            Err(msg) => {
+                // File-level error: propagate to every name in the group.
+                for name in names {
+                    entries.push((make_header(name), Err(msg.clone())));
+                }
+            }
+        }
+    }
+
+    match format {
+        Format::Compact => {
+            let (out, code) = format_results(&entries);
+            print!("{out}");
+            Ok(code)
+        }
+        Format::Json => {
+            // Task 4.4: multi-result → JSON array; single-result → scalar object.
+            let any_failed = entries.iter().any(|(_, r)| r.is_err());
+            let code = if any_failed { 2 } else { 0 };
+
+            // Collect JSON values. Errors become objects with an "error" field.
+            let json_values: Vec<serde_json::Value> = entries
+                .into_iter()
+                .map(|(header, result)| match result {
+                    Ok(body) => {
+                        // body is a JSON string from format_get_json_multi
+                        serde_json::from_str(&body)
+                            .unwrap_or(serde_json::json!({"error": "invalid json"}))
+                    }
+                    Err(msg) => serde_json::json!({"header": header, "error": msg}),
+                })
+                .collect();
+
+            if json_values.len() == 1 {
+                println!("{}", serde_json::to_string_pretty(&json_values[0])?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&json_values)?);
+            }
+            Ok(code)
+        }
+    }
+}
+
+fn format_get_json_multi(
+    decl: &Declaration,
+    source: &str,
+    file: &str,
+    module: Option<&str>,
+) -> Result<String> {
+    let json = serde_json::json!({
+        "name": decl.name,
+        "kind": decl.kind,
+        "source": source,
+        "start_line": decl.start_line,
+        "end_line": decl.end_line,
+        "file": file,
+        "module": module,
+    });
+    Ok(serde_json::to_string_pretty(&json)?)
 }
 
 // ---------------- rm ----------------
