@@ -176,3 +176,94 @@ When the `elmq grep` command encounters a file that fails to parse as Elm (for e
 - **THEN** the tool SHALL report matches from the other files normally
 - **AND** SHALL write a warning about `src/Broken.elm` to stderr
 - **AND** SHALL exit with code `0` if any matches were found
+
+### Requirement: Definition-site match filtering via `--definitions`
+The `elmq grep` command SHALL accept a `--definitions` boolean flag. When this flag is active, the tool SHALL only emit matches whose byte offset falls within the half-open range `[decl_name_start, decl_name_end)` of the enclosing top-level declaration (i.e., the match coincides with the declaration's own identifier, not a call site or other body use). Matches that fall outside any top-level declaration (imports, module header, type annotations without a mapped declaration) SHALL NEVER be emitted under `--definitions`. All other filters (comment/string exclusion, case-insensitivity, fixed-string mode) SHALL be applied before the definition-site test.
+
+#### Scenario: Definition site is emitted
+- **WHEN** `elmq grep --definitions 'update'` is run against a file where `update` is a top-level function and the match at line 10 column 1 falls within the byte range of its declaration name
+- **THEN** the match at that site SHALL be emitted
+
+#### Scenario: Call site is filtered
+- **WHEN** `elmq grep --definitions 'update'` is run against a file where `update` is also called on line 42 inside the body of some other function
+- **THEN** the call-site match SHALL NOT be emitted
+
+#### Scenario: Regex matching the name is a definition
+- **WHEN** `elmq grep --definitions '^upd'` is run and a top-level function named `update` exists, with the match offset falling within the `update` identifier range
+- **THEN** the match SHALL be emitted as a definition
+
+#### Scenario: Match in module header is filtered
+- **WHEN** `elmq grep --definitions 'Main'` is run and the only match is on the `module Main exposing (...)` header line
+- **THEN** no match SHALL be emitted
+
+#### Scenario: Match in import is filtered
+- **WHEN** `elmq grep --definitions 'Http'` is run and the only match is inside `import Http`
+- **THEN** no match SHALL be emitted
+
+#### Scenario: `--definitions` composes with comment filtering
+- **WHEN** `elmq grep --definitions 'update'` is run and the file contains `-- update this later` on the declaration's own signature line
+- **THEN** the comment match SHALL be filtered first (by the existing comment rule), and the declaration-name match (if any) SHALL still be emitted independently
+
+### Requirement: Full declaration source emission via `--source`
+The `elmq grep` command SHALL accept a `--source` boolean flag. When this flag is active, the tool SHALL replace its normal per-match output with per-declaration source blocks. For each match that passes all filters (including `--definitions` when also active), the tool SHALL look up the enclosing top-level declaration and emit its full source text — identical byte-for-byte to what `elmq get <file> <decl_name>` would produce, including doc comment, type annotation, and body. Results SHALL be deduplicated by `(canonical file path, declaration name)`: a declaration with multiple match sites SHALL produce exactly one source block per invocation. Matches that fall outside any top-level declaration SHALL NOT contribute a source block (there is no enclosing declaration to emit), but SHALL still count as "matches found" for exit-code purposes. Source blocks SHALL be emitted in the order of the first matching hit per declaration, across the discovered file walk.
+
+#### Scenario: Single decl with multiple matches deduped
+- **WHEN** `elmq grep --source 'foo'` is run and a single top-level function `bar` in `src/X.elm` contains 5 matches of `foo` in its body
+- **THEN** the output SHALL contain exactly one source block for `bar` (not five), whose body is the full source of `bar` identical to `elmq get src/X.elm bar`
+
+#### Scenario: Multiple decls across files in file-walk order
+- **WHEN** `elmq grep --source 'foo'` is run and `src/A.elm` has matches in decls `a1` and `a2`, and `src/B.elm` has a match in decl `b1`
+- **THEN** the output SHALL contain three source blocks in the order the matches were discovered during the file walk
+
+#### Scenario: Match outside any declaration produces no source block
+- **WHEN** `elmq grep --source 'Http'` is run and the only match is inside `import Http`
+- **THEN** no source block SHALL be emitted, and the process SHALL exit with status `1` (no decl-bearing matches)
+
+#### Scenario: `--definitions --source` combination
+- **WHEN** `elmq grep --definitions --source '^update$'` is run and a top-level function `update` exists in `src/Page/Home.elm`
+- **THEN** the output SHALL contain exactly one source block — the full source of `Page.Home.update` — and no blocks for call sites of `update`
+
+#### Scenario: Fixed-string and case-insensitivity compose with `--source`
+- **WHEN** `elmq grep -F -i --source 'HTTP.GET'` is run and a top-level function `fetchUsers` contains `Http.get` in its body
+- **THEN** the output SHALL contain one source block for `fetchUsers`
+
+### Requirement: Source output framing and module resolution
+When `elmq grep --source` emits more than one source block, each block SHALL be introduced by a header line of the form `## <Module>.<decl>` where `<Module>` is the Elm module name resolved from the source file via `elm.json` source-directories, and `<decl>` is the declaration name. When no `elm.json` is discoverable by walking up from the matched file, each block SHALL be introduced by `## <file>:<decl>` where `<file>` is the file path as it appears in the match record. When `--source` emits exactly one source block (including the case where many matches dedupe to one decl), the output SHALL be bare (no `##` header line), matching the single-argument framing contract shared across elmq subcommands.
+
+#### Scenario: Two source blocks, project discoverable
+- **WHEN** `elmq grep --source 'foo'` emits source for `Page.Home.update` and `Update.main` in a discoverable Elm project
+- **THEN** the output SHALL contain `## Page.Home.update` and `## Update.main` header lines, each followed by the corresponding full source
+
+#### Scenario: Fallback framing when no `elm.json`
+- **WHEN** `elmq grep --source 'foo' fixtures/` emits source for `A.bar` and `B.baz` in a directory with no discoverable `elm.json`
+- **THEN** the output SHALL contain `## fixtures/A.elm:bar` and `## fixtures/B.elm:baz` header lines, each followed by the corresponding full source
+
+#### Scenario: Single source block stays bare
+- **WHEN** `elmq grep --source '^update$' --definitions` emits exactly one source block for `update` in `src/X.elm`
+- **THEN** the output SHALL contain no `##` header line and SHALL be byte-identical to `elmq get src/X.elm update`
+
+### Requirement: JSON output under `--source`
+When `elmq grep --source --format json` is active, the command SHALL emit one NDJSON record per deduplicated declaration with fields `file` (as appearing in the match record), `module` (the resolved module name, or `null` when no `elm.json` is discoverable), `decl` (the declaration name), `decl_kind` (the existing declaration kind string), `source` (the full source text as defined in "Full declaration source emission via `--source`"), `start_line`, `end_line` (the line bounds of the declaration), and `match_count` (the integer number of filtered matches inside the declaration body that dedupe into this record). Records SHALL be separated by newlines and SHALL NOT be wrapped in a JSON array, matching the existing NDJSON contract.
+
+#### Scenario: NDJSON with source and match_count
+- **WHEN** `elmq grep --source --format json 'foo'` is run and two distinct decls match, the first with 3 hits and the second with 1
+- **THEN** the output SHALL contain two JSON objects, one per line, with `match_count` values of `3` and `1` respectively and `source` fields containing the full decl text
+
+#### Scenario: Null module on fallback
+- **WHEN** `elmq grep --source --format json 'foo'` is run in a directory with no `elm.json`
+- **THEN** each emitted JSON record's `module` field SHALL be `null`
+
+### Requirement: Exit-code semantics under new flags
+The existing exit-code contract (`0` when at least one match is reported, `1` when no matches, `2` on error) SHALL continue to apply with the new flags. Under `--definitions`, "a match" means a match that passes the definition-site coincidence test. Under `--source`, "a match" means a match that contributes to at least one emitted source block (i.e., falls inside some top-level declaration). Under `--definitions --source`, "a match" means a match that is both a definition site and contributes a source block. Error conditions (invalid regex, I/O failure) SHALL continue to exit `2` regardless of which flags are active.
+
+#### Scenario: `--definitions` with zero definition sites
+- **WHEN** `elmq grep --definitions 'foo'` is run and `foo` appears only as a call site, never as a declaration name
+- **THEN** the process SHALL exit with status `1`
+
+#### Scenario: `--source` with matches only in imports
+- **WHEN** `elmq grep --source 'Http'` is run and the only matches are on `import Http` lines with no matches inside any top-level declaration
+- **THEN** no source block SHALL be emitted and the process SHALL exit with status `1`
+
+#### Scenario: `--definitions --source` finds a definition
+- **WHEN** `elmq grep --definitions --source '^update$'` is run and a top-level function `update` exists
+- **THEN** one source block SHALL be emitted and the process SHALL exit with status `0`

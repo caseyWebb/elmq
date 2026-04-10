@@ -37,7 +37,7 @@ The CLI SHALL provide clear error messages for invalid input. Usage errors SHALL
 - **THEN** clap SHALL emit its usage message to stderr and the process SHALL exit with status `1`
 
 ### Requirement: Multi-argument output framing
-Subcommands that accept a variable-cardinality positional argument list (today: `list` files; `get`, `rm`, `refs` names; `import add` clauses; `import remove` modules; `expose`, `unexpose` items; `move-decl` names) SHALL frame their output according to a shared rule: when exactly one argument is provided the output SHALL be bare (identical to the pre-batching single-argument output for that command); when two or more arguments are provided the output SHALL consist of one block per argument, in input order, each block introduced by a line of the form `## <arg>` where `<arg>` is the literal argument as passed on the command line.
+Subcommands that accept a variable-cardinality positional argument list (today: `list` files; `get`, `rm`, `refs` names; `import add` clauses; `import remove` modules; `expose`, `unexpose` items; `move-decl` names) SHALL frame their output according to a shared rule: when exactly one argument is provided the output SHALL be bare (identical to the pre-batching single-argument output for that command); when two or more arguments are provided the output SHALL consist of one block per argument, in input order, each block introduced by a line of the form `## <arg>` where `<arg>` is the literal argument as passed on the command line. Subcommands that additionally support a grouped-variadic invocation mode (today: `get` with repeatable `-f`/`--file`) SHALL define their own header format for the grouped form in their own capability spec; the per-block structure (one block per logical result unit, in input order, bare when exactly one result) is shared, but the header text inside each `## ...` line is command-specific.
 
 #### Scenario: Single-argument call stays bare
 - **WHEN** a batch-capable subcommand is invoked with exactly one positional argument
@@ -50,6 +50,10 @@ Subcommands that accept a variable-cardinality positional argument list (today: 
 #### Scenario: Header body is per-argument result
 - **WHEN** an argument in a multi-argument call would have produced output X as a single-argument call
 - **THEN** the body of that argument's `## <arg>` block SHALL be X (without adding extra indentation or framing)
+
+#### Scenario: Grouped-variadic commands define their own header format
+- **WHEN** a subcommand that supports grouped variadics (e.g., `get -f FILE NAME...`) is invoked in grouped mode and produces multiple result blocks
+- **THEN** the per-block structure SHALL follow this requirement (one block per logical result, in input order, bare when exactly one result) but the header text inside each `## ...` line SHALL follow the format defined by that subcommand's own spec
 
 ### Requirement: Multi-argument error semantics and exit codes
 Batch-capable subcommands SHALL process each positional argument independently. A failure on any one argument SHALL NOT abort processing of the remaining arguments. Failures SHALL surface as `error: <message>` lines in that argument's output block (for multi-argument calls) or on the standard output stream (for single-argument calls, where there is no block). Exit codes SHALL be: `0` if every argument succeeded, `2` if any argument failed for a non-usage reason, and `1` reserved for usage errors (argparse failures, missing required arguments, invalid flag values).
