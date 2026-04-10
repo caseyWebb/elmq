@@ -62,10 +62,14 @@ docker run \
   elmq-bench /bench/analyze.sh
 ```
 
-Outputs:
-- Per-scenario token averages (input, output, cache) for each arm
-- Tool call counts and per-scenario tool breakdown
-- Verification pass rates
+Output is GitHub-flavored markdown with emoji indicators (🟢 winner, 🔴 loser, ✅/❌ pass/fail). When run interactively with `glow` installed, output is auto-piped through `glow` for styled terminal rendering. Pipe to a file for raw markdown (e.g. `> BENCHMARKS.md`).
+
+Contents:
+- Per-scenario token averages (input, output, cache) with winner highlighting
+- Cost and turns with standard deviation (±) and high-variance warnings (⚠️)
+- Overall summary with deltas (treatment − control)
+- Outlier warnings (>2σ)
+- Tool call counts, breakdown, and per-call details
 - Broken-run filtering (if scenario N fails, scenarios N+1..5 are excluded)
 
 ## Scenarios
