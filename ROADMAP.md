@@ -55,7 +55,7 @@ LLM-harness packaging (MCP, skill, plugin, npm) will return as a dedicated phase
 The benchmark harness in `benchmarks/` runs Claude Code against `rtfeldman/elm-spa-example` on five sequential Elm editing scenarios (add feature, rename module, extract module, add route, add variant). Two arms:
 
 - **`control`** — Claude works with built-in Read/Write/Edit/Grep, no elmq guidance
-- **`treatment`** — Claude gets elmq CLI guidance delivered as `CLAUDE.md` in the treatment workdir (project memory, propagates to spawned `Task`/`Agent` subagents). The v1 and v2-first-draft runs used `--append-system-prompt-file benchmarks/elmq-guide.md` instead, which does not reach subagents — see `openspec/changes/elmq-guide-v2/design.md` §"Delivery mechanism" for the evidence that motivated the swap.
+- **`treatment`** — Claude gets elmq CLI guidance delivered as `CLAUDE.md` in the treatment workdir (project memory, propagates to spawned `Task`/`Agent` subagents). The guide lives at `.claude-plugin/elmq-guide.md` and is also delivered at runtime via a Claude Code plugin SessionStart hook. The v1 and v2-first-draft runs used `--append-system-prompt-file` instead, which does not reach subagents — see `openspec/changes/elmq-guide-v2/design.md` §"Delivery mechanism" for the evidence that motivated the swap.
 
 The thesis under test (**Q1**): given Claude knows how to use elmq, does it actually save tokens on Elm editing tasks? A positive answer unlocks the follow-up question (**Q2**): which delivery mechanism (plugin, skill, hook, MCP, etc.) is worth investing in to deliver elmq's guidance at runtime?
 
@@ -68,7 +68,7 @@ Planned follow-ups once Q1 has preliminary data:
 
 The first benchmark run (5 scenarios × 3 runs, control vs. treatment with `elmq-guide.md` v1) showed treatment losing overall by ~61% (3.26M vs 2.02M tokens) while winning decisively on the one scenario with a perfect one-shot command (`02-rename-module`, −84% via `elmq mv`). Analysis of the tool-call traces surfaced a set of guide rules and CLI affordances that should flip the losing scenarios. Each bullet below will get its own OpenSpec change as we pick it up.
 
-### 6a. Guide v2 (`benchmarks/elmq-guide.md`) and delivery-mechanism change
+### 6a. Guide v2 (`.claude-plugin/elmq-guide.md`) and delivery-mechanism change
 
 The initial Phase 6a draft (preserved in git history) proposed an eight-rule guide organized into tiers. Mid-implementation the guide was substantially tightened under a scope constraint: *the guide describes elmq — what it does, what it replaces, how to invoke each subcommand, and factual gotchas about elmq's runtime behavior. It does not prescribe agent workflow (planning, subagent trust, shell hygiene) and it does not expose the benchmark's metrics (tool-call counts, cache-read cost models) to the agent.* The `elmq-guide-v2` change captures the full derivation and the rules-considered-and-cut rationale.
 

@@ -42,7 +42,8 @@ Rust toolchain is pinned in `rust-toolchain.toml` (rustup installs it automatica
 The library (`lib.rs` + `parser.rs` + `imports.rs` + `writer.rs` + `project.rs` + `refs.rs` + `move_decl.rs` + `variant.rs`) is fully testable without the CLI binary.
 
 - **`tests/`** — Integration tests per command: `get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `variant.rs`, `grep.rs`.
-- **`benchmarks/`** — Dockerized benchmark harness measuring token usage on Elm coding tasks. Two arms: `control` (Claude without elmq guidance) and `treatment` (elmq CLI guidance delivered as `CLAUDE.md` in the treatment workdir, which propagates to spawned `Task`/`Agent` subagents — unlike `--append-system-prompt-file`, which does not). Answers Q1: does elmq save tokens given Claude knows how to use it? Run via `./benchmarks/run.sh [control|treatment] [-n N]` — launches parallel runs with scoped results directories.
+- **`.claude-plugin/`** — Claude Code plugin that injects `elmq-guide.md` into sessions via a SessionStart hook. Activates conditionally when an Elm project (`elm.json`) is detected and `elmq` is on PATH. Install via `/plugin install elmq@caseyWebb`.
+- **`benchmarks/`** — Dockerized benchmark harness measuring token usage on Elm coding tasks. Two arms: `control` (Claude without elmq guidance) and `treatment` (elmq CLI guidance from `.claude-plugin/elmq-guide.md` delivered as `CLAUDE.md` in the treatment workdir, which propagates to spawned `Task`/`Agent` subagents). Answers Q1: does elmq save tokens given Claude knows how to use it? Run via `./benchmarks/run.sh [control|treatment] [-n N]` — launches parallel runs with scoped results directories.
 
 ## Conventions
 

@@ -1,0 +1,24 @@
+{
+  "name": "elmq",
+  "version": "0.5.0",
+  "description": "Automatically injects elmq CLI guidance into Claude Code sessions working in Elm projects",
+  "author": {
+    "name": "Casey Webb"
+  },
+  "repository": "https://github.com/caseyWebb/elmq",
+  "keywords": ["elm", "elmq", "tree-sitter", "cli"],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/hooks/session-start.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

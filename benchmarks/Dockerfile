@@ -19,7 +19,7 @@ COPY benchmarks/fixture/ /bench/fixture/
 RUN rm -rf /bench/fixture/.git
 COPY benchmarks/scenarios/ /bench/scenarios/
 COPY benchmarks/system-prompt.md /bench/system-prompt.md
-COPY benchmarks/elmq-guide.md /bench/elmq-guide.md
+COPY .claude-plugin/elmq-guide.md /bench/elmq-guide.md
 COPY benchmarks/run.sh /bench/run.sh
 COPY benchmarks/analyze.sh /bench/analyze.sh
 RUN chmod +x /bench/run.sh /bench/analyze.sh
