@@ -173,7 +173,9 @@ count_tool_calls() {
         echo "0"
         return
     fi
-    grep -c '"tool_use"' "$file" 2>/dev/null || echo "0"
+    local n
+    n=$(grep -c '"tool_use"' "$file" 2>/dev/null) || true
+    echo "${n:-0}"
 }
 
 # Get tool call breakdown from a session.json
@@ -491,16 +493,18 @@ print_detail_row() {
         local c_cost_sd="$C_DIM" c_turns_sd="$C_DIM"
         [ "$cost_sd_color" = "1" ] && c_cost_sd="$C_YELLOW"
         [ "$turns_sd_color" = "1" ] && c_turns_sd="$C_YELLOW"
-        # Build the sub-row by right-aligning ± values into fixed-width strings,
-        # then placing them at the exact column offsets of COST and TURNS.
-        local cost_sd_val="±$(format_cost "$cost_sd")"
-        local turns_sd_val="±${turns_sd}"
-        printf -v cost_sd_val '%10s' "$cost_sd_val"
-        printf -v turns_sd_val '%7s' "$turns_sd_val"
-        # 72 spaces = columns before COST (20 scenario + 1 sp + 10 arm + 1 sp + 10+10+11+10 data fields)
-        printf '%72s%s%s%s %s%s%s\n' "" \
-            "$c_cost_sd" "$cost_sd_val" "$C_RESET" \
-            "$c_turns_sd" "$turns_sd_val" "$C_RESET"
+        # Pre-format ± values to exact column widths matching the main row.
+        # ±$X.XXXX = 9 display cols, pad to 10; ±N = variable, pad to 7.
+        local cost_sd_str turns_sd_str
+        cost_sd_str="±$(format_cost "$cost_sd")"
+        turns_sd_str="±${turns_sd}"
+        while [ ${#cost_sd_str} -lt 10 ]; do cost_sd_str=" $cost_sd_str"; done
+        while [ ${#turns_sd_str} -lt 7 ]; do turns_sd_str=" $turns_sd_str"; done
+        printf "%-20s %-10s %10s %10s %11s %10s %s%s%s %s%s%s %7s %7s\n" \
+            "" "" "" "" "" "" \
+            "$c_cost_sd" "$cost_sd_str" "$C_RESET" \
+            "$c_turns_sd" "$turns_sd_str" "$C_RESET" \
+            "" ""
     fi
 }
 
