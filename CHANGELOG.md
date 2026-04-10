@@ -20,6 +20,32 @@
 * chore: reset version to 0.5.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/49
 * chore: release main by @caseyWebb in https://github.com/caseyWebb/elmq/pull/50
 * chore: reset version to 0.5.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/51
+* chore: release main by @caseyWebb in https://github.com/caseyWebb/elmq/pull/52
+* fix: use separate release PRs and reset version to 0.5.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/53
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.5.0...v0.6.0
+
+## 0.6.0 (2026-04-10)
+
+## What's Changed
+* fix: use draft releases to support immutable release assets by @caseyWebb in https://github.com/caseyWebb/elmq/pull/33
+* feat: add SLSA build provenance attestations for release binaries by @caseyWebb in https://github.com/caseyWebb/elmq/pull/35
+* chore(main): release 0.6.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/34
+* feat: add Claude Code plugin with SessionStart hook and release-please versioning by @caseyWebb in https://github.com/caseyWebb/elmq/pull/36
+* fix: reset version to 0.5.0 after orphaned release-please bump by @caseyWebb in https://github.com/caseyWebb/elmq/pull/37
+* chore(main): release 0.6.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/38
+* chore: reset release-please manifest to v0.5.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/39
+* feat: add release-please multi-package for independent plugin versioning by @caseyWebb in https://github.com/caseyWebb/elmq/pull/41
+* chore: release main by @caseyWebb in https://github.com/caseyWebb/elmq/pull/42
+* chore: reset release-please manifest to v0.5.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/43
+* chore: release main by @caseyWebb in https://github.com/caseyWebb/elmq/pull/44
+* fix: add force-tag-creation for draft releases by @caseyWebb in https://github.com/caseyWebb/elmq/pull/45
+* chore: release main by @caseyWebb in https://github.com/caseyWebb/elmq/pull/46
+* fix: unify release-please and release into single workflow by @caseyWebb in https://github.com/caseyWebb/elmq/pull/47
+* chore: reset version to 0.5.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/49
+* chore: release main by @caseyWebb in https://github.com/caseyWebb/elmq/pull/50
+* chore: reset version to 0.5.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/51
 
 
 **Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.5.0...v0.6.0
