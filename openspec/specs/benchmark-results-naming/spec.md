@@ -12,8 +12,8 @@ The benchmark harness SHALL generate per-run results directory names that do not
 
 #### Scenario: Wrapper timestamp format matches run.sh format
 
-- **WHEN** `benchmark.sh` computes `TIMESTAMP_BASE` for a parallel batch
-- **THEN** the format SHALL match `benchmarks/run.sh`'s format (no colons, same ordering guarantees)
+- **WHEN** `benchmarks/run.sh` computes `TIMESTAMP_BASE` for a parallel batch
+- **THEN** the format SHALL use no colons, with the same ordering guarantees as the container-mode timestamp
 - **AND** the `BENCHMARK_RUN_ID` environment variable passed to each container SHALL inherit that colon-free format
 
 ### Requirement: Fix is verified by observing a clean Write tool_result

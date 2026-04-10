@@ -354,6 +354,7 @@ pub fn execute_move_declaration(
     // Expose only moved declarations that are actually referenced externally.
     // For new targets (exposing (..)), rewrite the module line with an explicit list.
     // For existing targets, use writer::expose() which appends to the existing list.
+    // Custom types are exposed with (..) so constructors are accessible.
     {
         let needed_moved: Vec<String> = externally_needed
             .iter()
@@ -367,7 +368,10 @@ pub fn execute_move_declaration(
         if exposing_content.trim() == ".." {
             // New target file — replace (..) with explicit list of needed names.
             if !needed_moved.is_empty() {
-                let mut items: Vec<&str> = needed_moved.iter().map(|s| s.as_str()).collect();
+                let mut items: Vec<String> = needed_moved
+                    .iter()
+                    .map(|n| format_exposed_name(n, &source_summary))
+                    .collect();
                 items.sort();
                 let new_exposing = format!("({})", items.join(", "));
                 let old_exposing = format!("({})", exposing_content);
@@ -379,7 +383,8 @@ pub fn execute_move_declaration(
             for name in &needed_moved {
                 let tree = parser::parse(&new_target_text)?;
                 let summary = parser::extract_summary(&tree, &new_target_text);
-                new_target_text = writer::expose(&new_target_text, &summary, name)?;
+                let expose_name = format_exposed_name(name, &source_summary);
+                new_target_text = writer::expose(&new_target_text, &summary, &expose_name)?;
             }
         }
     }
@@ -416,7 +421,10 @@ pub fn execute_move_declaration(
         }
 
         if !source_needs.is_empty() {
-            let mut items: Vec<&str> = source_needs.iter().map(|s| s.as_str()).collect();
+            let mut items: Vec<String> = source_needs
+                .iter()
+                .map(|n| format_exposed_name(n, &source_summary))
+                .collect();
             items.sort();
             let import_line = format!("import {target_module} exposing ({})", items.join(", "));
             let tree = parser::parse(&new_source_text)?;
@@ -1272,6 +1280,17 @@ fn find_variant_parent_type(root: &Node, source: &str, variant_name: &str) -> Op
         }
     }
     None
+}
+
+/// Format a declaration name for an exposing list or import.
+/// Custom types get `(..)` so constructors are accessible; everything else is bare.
+fn format_exposed_name(name: &str, summary: &crate::FileSummary) -> String {
+    if let Some(decl) = summary.find_declaration(name)
+        && decl.kind == DeclarationKind::Type
+    {
+        return format!("{name}(..)");
+    }
+    name.to_string()
 }
 
 fn display_path(path: &Path) -> String {

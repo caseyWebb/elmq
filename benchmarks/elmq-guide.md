@@ -1,11 +1,14 @@
 # Working with `.elm` files: use `elmq`
 
-This is an Elm project. `elmq` is on PATH — a tree-sitter-aware CLI for reading and editing `.elm` files. Use it instead of the built-in tools on `.elm` files:
+This is an Elm project. `elmq` is on PATH — a tree-sitter-aware CLI for reading and editing `.elm` files.
 
-- Do not use `Read`. Use `elmq list` / `elmq get`.
-- Do not use `Edit`. Use `elmq patch` / `elmq set` / `elmq rm`.
+- **Never use `cat` on `.elm` files.** It dumps the entire file into context with no structure.
 - Do not use `Grep`, or `grep` / `rg` via `Bash`, to search Elm code. Use `elmq grep` for text discovery (returns the enclosing decl for free) and `elmq refs` for structural references through the import graph.
-- `Write` is fine for creating a new `.elm` file; switch to `elmq` for any further edits.
+- For **project-wide operations** (rename module, move declarations, add/remove variants), always use the dedicated `elmq` commands — they handle the entire dependency graph atomically.
+- For **single-file edits**, choose by file size:
+  - **Under ~200 lines** (check `elmq list` — it shows line counts): `Read` + `Edit` is simplest. Fewer round trips than `elmq get` + `elmq patch`.
+  - **Over ~200 lines**: use `elmq get` to read specific declarations and `elmq patch` to edit them. Avoids pulling the full file into context.
+- `Write` is fine for creating a new `.elm` file; switch to `elmq` or `Edit` for further edits.
 
 ## Discovery (step 0)
 
@@ -40,8 +43,6 @@ $ elmq get src/Api.elm fetchData
 
 `elmq list` and `elmq get` are targeted exploration tools — use them on files and declarations you need to understand, not carte blanche on the whole project. If you already know the file but not the decl, `list` it; if `elmq grep` already told you the decl name, skip straight to `get`.
 
-`elmq list` shows each file's line count. For files under ~200 lines, `Read`+`Edit` is simpler. For larger files, use `elmq get`/`patch` to avoid pulling the full source into context.
-
 **Fetch only what you need for the current step.** Fetch the 2-3 declarations relevant to your current edit, then fetch more as needed — don't bulk-read an entire module at once.
 
 - `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. Add `--docs` for doc comments. Accepts one or more files in a single call.
@@ -52,27 +53,50 @@ $ elmq get src/Api.elm fetchData
 
 ## Editing Elm code
 
-Reach for the highest-level command that matches the intent. The project-wide commands (`mv`, `rename`, `move-decl`, `variant add`, `variant rm`) update every call site in one call — do not reconstruct them manually with `Write` + `rm` + `import add` + fixups.
+**Work in two phases: plan all edits, then apply them in as few tool calls as possible.** Each tool call is a conversation turn that re-reads the full context. Fewer turns = lower cost.
+
+1. **Plan**: read the code you need (`elmq list`, `elmq get`, `Read`), decide on all the changes
+2. **Apply**: execute all edits in one or two Bash calls using `&&` chains, then `elm make` once at the end
+
+**Trust your edits.** If `elmq patch`/`set`/`Edit` exited `0`, it applied exactly what you asked for — don't re-read to "verify." Only re-read when the compiler complains.
+
+### Command reference
+
+**Project-wide** — these handle the entire dependency graph atomically:
 
 | Intent | Command |
 |---|---|
-| Rename/move a module project-wide | `elmq mv <file> <new_path>` (`--dry-run` to preview) |
-| Rename a declaration project-wide | `elmq rename <file> <old_name> <new_name>` |
-| Extract declarations into a new module, or move declarations between modules | `elmq move-decl <src> --to <target> <name...>` (creates `<target>` if it doesn't exist) |
-| List the case sites a type has (planning step before `variant add`/`rm`) | `elmq variant cases <file> --type <TypeName>` |
-| Add a type variant, optionally filling each case branch in the same call | `elmq variant add --type <TypeName> <file> '<Variant def>' [--fill <key>=<branch>]...` |
-| Remove a type variant | `elmq variant rm --type <TypeName> <file> <Constructor>` |
+| Rename/move a module | `elmq mv <file> <new_path>` (`--dry-run` to preview) |
+| Rename a declaration | `elmq rename <file> <old_name> <new_name>` |
+| Extract/move declarations between modules | `elmq move-decl <src> --to <target> <name...>` (creates `<target>` if needed) |
+| Add a type variant + fill case branches | `elmq variant add --type <T> <file> '<Variant>' [--fill <key>=<branch>]...` |
+| Remove a type variant | `elmq variant rm --type <T> <file> <Constructor>` |
+
+**Single-file** — chain these with `&&` when you have several:
+
+| Intent | Command |
+|---|---|
 | Find-replace inside a declaration | `elmq patch --old '…' --new '…' <file> <name>` |
-| Upsert a declaration | `elmq set <file>` (source from stdin via heredoc) |
+| Upsert a declaration (stdin heredoc) | `elmq set <file> << 'ELM' ... ELM` |
 | Remove declarations | `elmq rm <file> <name...>` |
-| Add imports | `elmq import add <file> 'Html exposing (Html, div)' ...` |
-| Remove imports | `elmq import remove <file> Html ...` |
-| Add to exposing list | `elmq expose <file> name ...` (or `'Type(..)'`) |
-| Remove from exposing list | `elmq unexpose <file> name ...` |
+| Add/remove imports | `elmq import add|remove <file> <arg...>` |
+| Add/remove from exposing list | `elmq expose|unexpose <file> <item...>` |
+
+### Chaining edits
+
+You've already read the source — the old strings are deterministic. Chain confidently:
+
+```bash
+elmq patch --old '...' --new '...' src/Route.elm Route && \
+elmq patch --old '...' --new '...' src/Route.elm parser && \
+elmq patch --old '...' --new '...' src/Page.elm viewMenu && \
+elmq import add src/Main.elm 'Page.Bookmarks as Bookmarks' && \
+elmq expose src/Page.elm Bookmarks
+```
 
 ### Extracting declarations into a new module
 
-`elmq move-decl` handles extraction in one call — it creates the target file, moves the declarations, updates `exposing (…)` lists on both sides, and rewrites every qualified reference in the project:
+`elmq move-decl` handles extraction in one call — creates the target file, moves the declarations, updates `exposing (…)` lists, and rewrites every qualified reference project-wide:
 
 ```
 elmq move-decl src/Types.elm \
@@ -80,42 +104,30 @@ elmq move-decl src/Types.elm \
   Token validate decode encode
 ```
 
-Do not manually reconstruct this with `Write` + `rm` + `import add` + find-and-replace. `move-decl` handles the entire dependency graph in a single atomic operation.
+Do not manually reconstruct this with `Write` + `rm` + `import add` + find-and-replace.
 
-### Adding a variant with branch bodies (two turns)
+### Adding a variant (plan then apply)
 
-1. **`elmq variant cases <file> --type <T>`** — returns every case site with its enclosing function body and a stable `key`. This is all the context you need — don't grep or get the type definition separately.
-2. **`elmq variant add <file> --type <T> '<Variant>' --fill key=branch ...`** — inserts the variant and fills each case branch. Sites you omit fall back to `Debug.todo` stubs. Then use `elmq patch`/`set` for any non-case dispatch (list-based, parser combinators, etc.) that `--fill` can't reach.
+This is the plan-then-apply pattern in action. Two turns:
 
-```
-$ elmq variant cases src/Theme.elm --type Theme
-$ elmq variant add src/Theme.elm --type Theme 'HighContrast' \
+**Turn 1 (plan):** `elmq variant cases <file> --type <T>` — returns every case site with its enclosing function body and a stable `key`. Read the output and compose your `--fill` arguments for every key. This also tells you which sites are case expressions (`--fill` handles those) vs list-based dispatch (you'll `elmq patch` those).
+
+**Turn 2 (apply):** `variant add` with all `--fill` args, chained with `elmq patch` for non-case sites:
+
+```bash
+elmq variant add src/Theme.elm --type Theme 'HighContrast' \
     --fill 'toClass=HighContrast -> "theme-high-contrast"' \
-    --fill 'toCssVars=HighContrast -> highContrastVars'
-$ elm make src/Main.elm
+    --fill 'toCssVars=HighContrast -> highContrastVars' && \
+elmq patch --old '...' --new '...' src/Theme.elm allThemes
 ```
 
-**`--fill` keys must come from `variant cases` output.** `--fill` only targets `case` expressions. Functions that reference the type through list-based dispatch (e.g. building a list of items per variant, parser combinator lists) will not appear as case sites — use `elmq patch` for those. Always run `variant cases` first so you know which keys are valid before calling `variant add`.
+**Do not call `variant add` without `--fill` and then patch each `Debug.todo` stub afterward** — that turns 1 tool call into many.
 
-When one function has two case expressions on the same type, or two files both define a function with the same name, `cases` prints disambiguated keys (`handler#1`, `handler#2`, or `src/Other.elm:handler`) — pass those through. If you pass an ambiguous bare key, `variant add` errors with the valid disambiguated alternatives before touching any file.
+`--fill` keys must come from `variant cases` output. `--fill` only targets case expressions — functions using list-based dispatch (e.g. building a list of items per variant, parser combinator lists) won't appear as case sites; chain `elmq patch` for those.
+
+When one function has two case expressions on the same type, or two files both define a function with the same name, `cases` prints disambiguated keys (`handler#1`, `handler#2`, or `src/Other.elm:handler`) — pass those through.
 
 `--fill` values are `KEY=BRANCH` pairs split on the **first** `=`, so branch bodies containing `=` (e.g. record updates) are fine. The branch text is inserted verbatim with proper indentation; write the full `Pattern -> body` as you would type it into the source.
-
-### `elmq set` stdin
-
-`elmq set` reads source from stdin via heredoc:
-
-```
-elmq set src/Helpers.elm << 'ELM'
-clamp : comparable -> comparable -> comparable -> comparable
-clamp low high value =
-    max low (min high value)
-ELM
-```
-
-Prefer `elmq patch` for fragment edits (new case branch, record field, parameter, body tweak); reserve `elmq set` for whole-body rewrites.
-
-**Trust your edits.** If `elmq patch`/`set` exited `0`, it applied exactly what you asked for — don't re-read to "verify." Only re-read when the compiler complains. **Compile at the end, not after every edit** — batch all edits, then run `elm make` once.
 
 ## Reference notes
 

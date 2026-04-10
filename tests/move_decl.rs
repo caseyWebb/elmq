@@ -822,3 +822,62 @@ fn unreferenced_decl_not_exposed_in_new_target() {
         "expected exposing (..) for unreferenced decl, got:\n{target}"
     );
 }
+
+#[test]
+fn custom_type_exposed_with_constructors_in_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+
+    // Move a custom type out of Source. Source still pattern-matches on its
+    // constructors, so both the target exposing list and the source import
+    // must use Type(..) syntax.
+    write_elm(
+        root,
+        "src/Source.elm",
+        "\
+module Source exposing (Cred, username, useCred)
+
+
+type Cred
+    = Cred String String
+
+
+username (Cred uname _) =
+    uname
+
+
+useCred (Cred u t) =
+    u ++ t
+",
+    );
+
+    // A third-party file also references Cred.
+    write_elm(
+        root,
+        "src/Other.elm",
+        "\
+module Other exposing (check)
+
+import Source exposing (Cred(..))
+
+
+check (Cred u _) =
+    u
+",
+    );
+
+    run_move(root, "src/Source.elm", &["Cred"], "src/Auth.elm", false).unwrap();
+
+    let target = read_elm(root, "src/Auth.elm");
+    assert!(
+        target.contains("Cred(..)"),
+        "expected target to expose Cred(..), got:\n{target}"
+    );
+
+    let source = read_elm(root, "src/Source.elm");
+    assert!(
+        source.contains("import Auth exposing (Cred(..))"),
+        "expected source to import Cred(..) from Auth, got:\n{source}"
+    );
+}
