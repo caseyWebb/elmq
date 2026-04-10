@@ -21,7 +21,7 @@ CLAUDE_CODE_OAUTH_TOKEN=your-token-here
 
 This file is gitignored.
 
-The Docker image is built automatically on every `./benchmark.sh` invocation (Docker's layer cache makes this cheap when sources are unchanged; the Rust compile and `COPY benchmarks/*` layers only re-run when their inputs change). If you want to build manually — for example, to surface compile errors before a benchmark run — use:
+The Docker image is built automatically on every `./benchmarks/run.sh` invocation (Docker's layer cache makes this cheap when sources are unchanged; the Rust compile and `COPY benchmarks/*` layers only re-run when their inputs change). If you want to build manually — for example, to surface compile errors before a benchmark run — use:
 
 ```sh
 ./benchmarks/build.sh
@@ -31,16 +31,14 @@ This compiles the elmq release binary and builds the `elmq-bench` image with Nod
 
 ## Running Benchmarks
 
-The recommended entry point is `./benchmark.sh` at the repo root — a thin wrapper that launches multiple runs in parallel, scopes each to its own results directory, and captures per-run logs.
-
 ```sh
-./benchmark.sh                     # 1 control + 1 treatment in parallel
-./benchmark.sh -n 3                # 3 of each (6 parallel runs)
-./benchmark.sh control             # 1 control only
-./benchmark.sh treatment -n 5      # 5 treatments in parallel
+./benchmarks/run.sh                     # 1 control + 1 treatment in parallel
+./benchmarks/run.sh -n 3                # 3 of each (6 parallel runs)
+./benchmarks/run.sh control             # 1 control only
+./benchmarks/run.sh treatment -n 5      # 5 treatments in parallel
 ```
 
-Each run is scoped as `benchmarks/results/<arm>/<TIMESTAMP>-<arm>-<index>/` and its stdout/stderr goes to `benchmarks/results/logs/<TIMESTAMP>-<arm>-<index>.log`. All timestamped directories in each arm accumulate across batches; `analyze.sh` averages across every run it finds, so running `./benchmark.sh -n 3` today and again tomorrow gives you 6 samples per arm to compare.
+Each run is scoped as `benchmarks/results/<arm>/<TIMESTAMP>-<arm>-<index>/` and its stdout/stderr goes to `benchmarks/results/logs/<TIMESTAMP>-<arm>-<index>.log`. All timestamped directories in each arm accumulate across batches; `analyze.sh` averages across every run it finds, so running `./benchmarks/run.sh -n 3` today and again tomorrow gives you 6 samples per arm to compare.
 
 Rate limits and system resources cap the practical value of `N`. Start with `-n 2` or `-n 3`; very large values will hit Anthropic rate limits and/or saturate Docker.
 
