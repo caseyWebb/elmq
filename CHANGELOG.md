@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 (2026-04-10)
+
+## What's Changed
+* fix: build before release to avoid immutable release issues by @caseyWebb in https://github.com/caseyWebb/elmq/pull/62
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/elmq-v0.7.0...elmq-v0.7.1
+
 ## 0.7.0 (2026-04-10)
 
 ## What's Changed
