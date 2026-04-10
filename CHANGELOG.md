@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 (2026-04-10)
+
+## What's Changed
+* fix: move-decl constructor exposure + benchmark guide optimization by @caseyWebb in https://github.com/caseyWebb/elmq/pull/27
+* chore(deps): Bump tree-sitter from 0.26.7 to 0.26.8 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/30
+* chore(deps): Bump dependabot/fetch-metadata from 2 to 3 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/29
+* docs(benchmarks): refine elmq-guide and update results by @caseyWebb in https://github.com/caseyWebb/elmq/pull/31
+* feat: add npm distribution for cross-platform installs by @caseyWebb in https://github.com/caseyWebb/elmq/pull/32
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.4.0...v0.5.0
+
 ## 0.4.0 (2026-04-10)
 
 ## What's Changed
