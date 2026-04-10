@@ -6,8 +6,8 @@ This is an Elm project. `elmq` is on PATH — a tree-sitter-aware CLI for readin
 - Do not use `Grep`, or `grep` / `rg` via `Bash`, to search Elm code. Use `elmq grep` for text discovery (returns the enclosing decl for free) and `elmq refs` for structural references through the import graph.
 - For **project-wide operations** (rename module, move declarations, add/remove variants), always use the dedicated `elmq` commands — they handle the entire dependency graph atomically.
 - For **single-file edits**, choose by file size:
-  - **Under ~350 lines** (check `elmq list` — it shows line counts): `Read` + `Edit` is simplest. Fewer round trips than `elmq get` + `elmq patch`.
-  - **Over ~350 lines**: use `elmq get` to read specific declarations and `elmq patch` to edit them. Avoids pulling the full file into context.
+  - **Under ~300 lines** (check `elmq list` — it shows line counts): `Read` + `Edit` is simplest. Fewer round trips than `elmq get` + `elmq patch`.
+  - **Over ~300 lines**: use `elmq get` to read specific declarations and `elmq patch` to edit them. Avoids pulling the full file into context.
 - `Write` is fine for creating a new `.elm` file; switch to `elmq` or `Edit` for further edits.
 
 ## Discovery (step 0)
