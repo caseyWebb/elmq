@@ -46,6 +46,16 @@ run_arm() {
     git init -q
     git config user.email "bench@elmq"
     git config user.name "elmq-bench"
+
+    # Treatment arm: deliver elmq guidance as project memory via CLAUDE.md in the
+    # workdir. CLAUDE.md is picked up automatically by claude -p from the current
+    # working directory, and unlike --append-system-prompt-file it propagates to
+    # any subagents spawned via the Task tool (Explore, etc). The empirical basis
+    # is in openspec/changes/elmq-guide-v2/design.md §"Delivery mechanism".
+    if [[ "$arm" == "treatment" ]]; then
+        cp "$BENCH_DIR/elmq-guide.md" "$work_dir/CLAUDE.md"
+    fi
+
     git add -A
     git commit -q -m "initial fixture state"
 
@@ -59,10 +69,7 @@ run_arm() {
         --append-system-prompt-file "$SYSTEM_PROMPT"
     )
 
-    # Treatment arm: inject elmq guidance via a second system-prompt file
-    if [[ "$arm" == "treatment" ]]; then
-        claude_base+=(--append-system-prompt-file "$BENCH_DIR/elmq-guide.md")
-    fi
+    # (Treatment-arm guidance is delivered via CLAUDE.md in workdir, above.)
 
     for scenario in "${SCENARIOS[@]}"; do
         local scenario_dir="$run_dir/$scenario"
