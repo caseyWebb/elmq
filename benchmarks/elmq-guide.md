@@ -45,8 +45,8 @@ $ elmq get src/Api.elm fetchData
 
 **Fetch only what you need for the current step.** Fetch the 2-3 declarations relevant to your current edit, then fetch more as needed — don't bulk-read an entire module at once.
 
-- `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. Add `--docs` for doc comments. Accepts multiple files in a single call.
-- `elmq get -f <file> <name...> [-f <file> <name...> ...]` — read declarations across one or more files in a single call. Always use `-f` to read everything you need in one turn instead of separate `get` calls per file.
+- `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. **Pass all files in one call**: `elmq list src/Route.elm src/Page.elm src/Main.elm`, not three separate calls.
+- `elmq get -f <file> <name...> [-f <file> <name...> ...]` — read declarations from one or more files. **Combine all files into one call**: `elmq get -f src/Route.elm Route parser -f src/Page.elm Page viewMenu -f src/Main.elm Model Msg update`. Do not issue separate `get` calls per file.
 - `elmq refs <file>` — every project file that imports this module.
 - `elmq refs <file> <name...>` — every project reference to one or more declarations in this file.
 
