@@ -172,6 +172,52 @@ pub enum Command {
         #[command(subcommand)]
         command: VariantCommand,
     },
+    /// Search for a regex in Elm sources, annotated with enclosing top-level declaration.
+    ///
+    /// This is the discovery entry point: use `elmq grep` to locate text in Elm files
+    /// and get back the containing declaration name for free, then pipe into `elmq get`.
+    ///
+    /// By default, matches inside comments (`--` and `{- -}`) and inside string literals
+    /// (including `"""`) are filtered out. Pass `--include-comments` or `--include-strings`
+    /// to re-enable each class independently.
+    ///
+    /// Project discovery walks up for `elm.json`; if none is found, falls back to
+    /// recursively walking the current directory. Both paths honor `.gitignore`.
+    ///
+    /// Exit codes: 0 if matches found, 1 if none, 2 on error. Matches ripgrep.
+    Grep {
+        /// Regex pattern (Rust-regex syntax). Use -F for literal matching.
+        pattern: String,
+
+        /// Optional path to restrict search to (file or directory).
+        path: Option<PathBuf>,
+
+        /// Treat the pattern as a literal string rather than a regex.
+        #[arg(short = 'F', long)]
+        fixed: bool,
+
+        /// Case-insensitive matching.
+        #[arg(short = 'i', long)]
+        ignore_case: bool,
+
+        /// Include matches that fall inside `--` or `{- -}` comments (filtered by default).
+        #[arg(long)]
+        include_comments: bool,
+
+        /// Include matches that fall inside string literals (filtered by default).
+        #[arg(long)]
+        include_strings: bool,
+
+        /// Output format: compact `file:line:decl:text` (default) or NDJSON.
+        #[arg(long, value_enum, default_value_t = GrepFormat::Compact)]
+        format: GrepFormat,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum GrepFormat {
+    Compact,
+    Json,
 }
 
 #[derive(Subcommand)]

@@ -3,7 +3,7 @@ mod framing;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Command, Format, ImportCommand, VariantCommand};
+use cli::{Cli, Command, Format, GrepFormat, ImportCommand, VariantCommand};
 use elmq::parser;
 use elmq::project;
 use elmq::refs;
@@ -255,6 +255,30 @@ fn run_command(cli: Cli) -> Result<i32> {
                 }
             }
             Ok(0)
+        }
+
+        Command::Grep {
+            pattern,
+            path,
+            fixed,
+            ignore_case,
+            include_comments,
+            include_strings,
+            format,
+        } => {
+            let args = elmq::grep::GrepArgs {
+                pattern,
+                path,
+                fixed,
+                ignore_case,
+                include_comments,
+                include_strings,
+                format: match format {
+                    GrepFormat::Compact => elmq::grep::GrepFormat::Compact,
+                    GrepFormat::Json => elmq::grep::GrepFormat::Json,
+                },
+            };
+            Ok(elmq::grep::execute(args))
         }
 
         Command::Variant { command } => match command {

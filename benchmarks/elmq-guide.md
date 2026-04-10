@@ -4,12 +4,32 @@ This is an Elm project. `elmq` is on PATH — a tree-sitter-aware CLI for readin
 
 - Do not use `Read`. Use `elmq list` / `elmq get`.
 - Do not use `Edit`. Use `elmq patch` / `elmq set` / `elmq rm`.
-- Do not use `Grep`, or `grep` / `rg` via `Bash`, to search Elm code. Use `elmq refs`, which resolves qualified, aliased, and exposed references through the import graph — text search misses all of those.
+- Do not use `Grep`, or `grep` / `rg` via `Bash`, to search Elm code. Use `elmq grep` for text discovery (returns the enclosing decl for free) and `elmq refs` for structural references through the import graph.
 - `Write` is fine for creating a new `.elm` file; switch to `elmq` for any further edits.
+
+## Discovery (step 0)
+
+When you don't already know the name of the declaration you need to touch, start with `elmq grep`. It regex-searches `.elm` files and, for each hit, reports the enclosing top-level declaration — so you can pipe directly into `elmq get` without ever reading a whole file.
+
+- `elmq grep <regex> [path]` — compact output is `file:line:decl:line_text` (`-` in the decl slot means the match is outside any top-level decl, e.g. imports or the module header).
+- Flags: `-F` literal, `-i` ignore case, `--format json` for machine pipelines.
+- **Comments and string literals are filtered by default.** That is the whole point — it keeps discovery signal clean. Opt back in only when you specifically want them: `--include-comments` for `TODO` / docstring hunts, `--include-strings` for user-facing error messages.
+- Project discovery is automatic: walks ancestors for `elm.json` (works from monorepo subdirs), falls back to walking CWD recursively if none is found, honors `.gitignore` in both paths.
+- Exit codes match `rg`: `0` match, `1` no match, `2` error — safe in pipelines.
+
+Typical discovery → retrieval flow:
+
+```
+$ elmq grep 'Http\.get'
+src/Api.elm:42:fetchUsers:    Http.get { url = "/users" }
+$ elmq get src/Api.elm fetchUsers
+```
+
+> **Do not `rg` inside the Elm tree.** `rg` returns `file:line:text`, which forces you to read the whole file to figure out which function each hit belongs to — that is the exact token cost `elmq grep` exists to eliminate. `elmq grep` does the offset → enclosing-decl mapping for free via tree-sitter, and filters comment/string noise by default. Reach for `rg` only on non-`.elm` files.
 
 ## Reading Elm code
 
-`elmq list` and `elmq get` are targeted exploration tools — use them on files and declarations you need to understand, not carte blanche on the whole project. Discover files with `find` or `Glob` first, then `list` the ones relevant to the task.
+`elmq list` and `elmq get` are targeted exploration tools — use them on files and declarations you need to understand, not carte blanche on the whole project. If you already know the file but not the decl, `list` it; if `elmq grep` already told you the decl name, skip straight to `get`.
 
 - `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. Add `--docs` for doc comments. Accepts one or more files in a single call.
 - `elmq get <file> <name...>` — full source of one or more declarations from the same file.

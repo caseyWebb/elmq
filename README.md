@@ -253,6 +253,32 @@ removed Decrement from Msg in src/Types.elm
 
 Removes a constructor and its matching branches from all case expressions. Errors if removing the last variant (use `elmq rm` instead). Use `--dry-run` to preview changes.
 
+### Search Elm sources
+
+```sh
+elmq grep "Http\.get"
+```
+
+```
+src/Api.elm:42:fetchUser:    Http.get { url = userUrl, expect = Http.expectJson GotUser decoder }
+src/Page/Home.elm:88:init:    Http.get { url = feedUrl, expect = Http.expectJson GotFeed feedDecoder }
+```
+
+Regex search over Elm files (Rust `regex` dialect, same as ripgrep) that annotates each hit with its **enclosing top-level declaration** — the discovery entry point that feeds into `elmq get`. Use `-F` for literal matching and `-i` for case-insensitive. Matches inside `--` / `{- -}` comments and string literals are filtered by default; pass `--include-comments` or `--include-strings` to opt back in independently.
+
+Project discovery walks up for `elm.json` and honors its `source-directories`; if no `elm.json` is found, falls back to recursively walking the CWD. Both paths honor `.gitignore`. Exit codes match ripgrep: `0` on matches, `1` on none, `2` on error.
+
+Pipe into `elmq get` for a find-then-retrieve workflow:
+
+```sh
+elmq grep --format json "Http\.get" \
+  | jq -r 'select(.decl) | "\(.file) \(.decl)"' \
+  | sort -u \
+  | while read file decl; do elmq get "$file" "$decl"; done
+```
+
+Matches that land outside any top-level declaration (imports, module header) report `decl: null` in JSON and an empty decl slot in compact output.
+
 ### JSON output
 
 ```sh
