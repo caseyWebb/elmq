@@ -6,8 +6,8 @@ This is an Elm project. `elmq` is on PATH — a tree-sitter-aware CLI for readin
 - Do not use `Grep`, or `grep` / `rg` via `Bash`, to search Elm code. Use `elmq grep` for text discovery (returns the enclosing decl for free) and `elmq refs` for structural references through the import graph.
 - For **project-wide operations** (rename module, move declarations, add/remove variants), always use the dedicated `elmq` commands — they handle the entire dependency graph atomically.
 - For **single-file edits**, choose by file size:
-  - **Under ~200 lines** (check `elmq list` — it shows line counts): `Read` + `Edit` is simplest. Fewer round trips than `elmq get` + `elmq patch`.
-  - **Over ~200 lines**: use `elmq get` to read specific declarations and `elmq patch` to edit them. Avoids pulling the full file into context.
+  - **Under ~500 lines** (check `elmq list` — it shows line counts): `Read` + `Edit` is simplest. Fewer round trips than `elmq get` + `elmq patch`.
+  - **Over ~500 lines**: use `elmq get` to read specific declarations and `elmq patch` to edit them. Avoids pulling the full file into context.
 - `Write` is fine for creating a new `.elm` file; switch to `elmq` or `Edit` for further edits.
 
 ## Discovery (step 0)
@@ -45,9 +45,8 @@ $ elmq get src/Api.elm fetchData
 
 **Fetch only what you need for the current step.** Fetch the 2-3 declarations relevant to your current edit, then fetch more as needed — don't bulk-read an entire module at once.
 
-- `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. Add `--docs` for doc comments. Accepts one or more files in a single call.
-- `elmq get <file> <name...>` — full source of one or more declarations from the same file.
-- `elmq get -f <file> <name...> [-f <file> <name...> ...]` — read declarations across multiple files in one call. Each `-f` group is a file followed by one or more names. Output frames each block as `## Module.decl` (or `## file:decl` without `elm.json`). Use this after `elmq list` on several files: list, pick the decls you need, then fetch them all in one `get -f` call instead of N separate calls.
+- `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. Add `--docs` for doc comments. Accepts multiple files in a single call.
+- `elmq get -f <file> <name...> [-f <file> <name...> ...]` — read declarations across one or more files in a single call. Always use `-f` to read everything you need in one turn instead of separate `get` calls per file.
 - `elmq refs <file>` — every project file that imports this module.
 - `elmq refs <file> <name...>` — every project reference to one or more declarations in this file.
 
@@ -58,7 +57,7 @@ $ elmq get src/Api.elm fetchData
 1. **Plan**: read the code you need (`elmq list`, `elmq get`, `Read`), decide on all the changes
 2. **Apply**: execute all edits in one or two Bash calls using `&&` chains, then `elm make` once at the end
 
-**Trust your edits.** If `elmq patch`/`set`/`Edit` exited `0`, it applied exactly what you asked for — don't re-read to "verify." Only re-read when the compiler complains.
+**Trust your edits.** If `elmq patch`/`set`/`variant add`/`Edit` exited `0`, it applied exactly what you asked for. **Never re-read a file or declaration after a successful edit** — each re-read is a wasted turn. Only re-read when the compiler reports an error you need to diagnose.
 
 ### Command reference
 
