@@ -2,7 +2,7 @@ name: Release
 
 on:
   release:
-    types: [published]
+    types: [created]
 
 permissions:
   contents: write
@@ -81,7 +81,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v6
@@ -231,3 +231,13 @@ jobs:
           git add Formula/elmq.rb
           git commit -m "elmq ${{ github.ref_name }}"
           git push
+
+  publish-release:
+    name: Publish release
+    needs: [build, npm-publish, homebrew]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ github.ref_name }}" --repo caseyWebb/elmq --draft=false
