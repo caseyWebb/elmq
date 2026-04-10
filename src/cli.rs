@@ -241,6 +241,28 @@ pub enum VariantCommand {
         /// Preview changes without writing anything
         #[arg(long)]
         dry_run: bool,
+
+        /// Fill a case-site branch body instead of the default `Debug.todo "<Variant>"`
+        /// stub. Syntax: `--fill <key>=<branch_text>` (repeatable). Split on the first
+        /// `=`; the key comes from `elmq variant cases` output, the body is the branch
+        /// text that replaces the stub.
+        #[arg(long, value_name = "KEY=BRANCH")]
+        fill: Vec<String>,
+    },
+    /// List every case expression on a type, with its enclosing function body and a
+    /// stable site key. Read-only companion to `variant add --fill` — run this first
+    /// to gather the context needed to synthesize fill bodies.
+    Cases {
+        /// Path to the Elm file that declares the custom type
+        file: PathBuf,
+
+        /// Name of the custom type (e.g. "Msg")
+        #[arg(long = "type")]
+        type_name: String,
+
+        /// Output format
+        #[arg(long, value_enum, default_value_t = Format::Compact)]
+        format: Format,
     },
     /// Remove a constructor from a custom type and remove branches from all case expressions
     Rm {

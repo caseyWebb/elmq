@@ -45,7 +45,8 @@ Reach for the highest-level command that matches the intent. The project-wide co
 | Rename/move a module project-wide | `elmq mv <file> <new_path>` (`--dry-run` to preview) |
 | Rename a declaration project-wide | `elmq rename <file> <old_name> <new_name>` |
 | Extract declarations into a new module, or move declarations between modules | `elmq move-decl <src> --to <target> <name...>` (creates `<target>` if it doesn't exist) |
-| Add a type variant | `elmq variant add --type <TypeName> <file> '<Variant def>'` |
+| List the case sites a type has (planning step before `variant add`/`rm`) | `elmq variant cases <file> --type <TypeName>` |
+| Add a type variant, optionally filling each case branch in the same call | `elmq variant add --type <TypeName> <file> '<Variant def>' [--fill <key>=<branch>]...` |
 | Remove a type variant | `elmq variant rm --type <TypeName> <file> <Constructor>` |
 | Find-replace inside a declaration | `elmq patch --old '…' --new '…' <file> <name>` |
 | Upsert a declaration | `elmq set <file>` (source from stdin via heredoc) |
@@ -66,6 +67,38 @@ elmq move-decl src/Api.elm \
 ```
 
 `move-decl` creates the target file, removes the declarations from the source, updates both files' `exposing (…)` lists, and rewrites every qualified reference in the project to use the new module path.
+
+### Adding a variant with branch bodies (the three-turn pattern)
+
+`elmq variant add` inserts `Debug.todo "<Variant>"` stubs into every matching case expression by default. Patching them one-by-one afterward is a turn sink — a single call with `--fill` can write real branch bodies in the same operation. The workflow is:
+
+1. **`elmq variant cases <file> --type <T>`** — read-only. Returns every case expression in the project that matches on `T`, with the enclosing function body and a stable `key` per site. Read it once to plan bodies.
+2. **`elmq variant add <file> --type <T> '<Variant>' --fill key=branch ...`** — atomic write. Inserts the variant into the type declaration and fills each case branch from `--fill`. Sites you omit from `--fill` fall back to `Debug.todo` stubs (graceful degradation).
+3. **`elm make`** — verify.
+
+Worked example for adding a `Bookmarks` page to a router:
+
+```
+# 1. Plan: see all case expressions on Route and Page.
+$ elmq variant cases src/Route.elm --type Route
+$ elmq variant cases src/Page.elm  --type Page
+
+# 2. Write: add the variant and fill every branch in one shot.
+$ elmq variant add src/Route.elm --type Route 'Bookmarks' \
+    --fill 'routeToPieces=Bookmarks -> [ "bookmarks" ]' \
+    --fill 'parser=Parser.map Bookmarks (s "bookmarks")'
+
+$ elmq variant add src/Page.elm --type Page 'Bookmarks' \
+    --fill 'viewMenu=Bookmarks -> ...' \
+    --fill 'isActive=( Bookmarks, Route.Bookmarks ) -> True'
+
+# 3. Verify once.
+$ elm make src/Main.elm
+```
+
+Keys come verbatim from the `cases` output. In the common case the bare function name works (`update`, `view`, `parser`). When one function has two case expressions on the same type, or two files both define a function with the same name, `cases` prints disambiguated keys (`update#1`, `update#2`, or `src/Main.elm:update`) — pass those through. If you pass an ambiguous bare key, `variant add` errors with the valid disambiguated alternatives before touching any file.
+
+`--fill` values are `KEY=BRANCH` pairs split on the **first** `=`, so branch bodies containing `=` (e.g. record updates) are fine. The branch text is inserted verbatim with proper indentation; write the full `Pattern -> body` as you would type it into the source.
 
 ### `elmq set` stdin
 
@@ -91,4 +124,4 @@ Every tool call is another assistant turn, and each turn re-pays the cache-read 
 
 - **Multi-argument output is framed.** Commands that accept `<...>` positional rest (`list`, `get`, `rm`, `refs`, `import add`, `import remove`, `expose`, `unexpose`, `move-decl`) run best-effort per argument: a bad argument does not abort the others. With two or more arguments, output is `## <arg>` blocks in input order, with per-argument errors rendered inline as `error: …` on stdout (not stderr). Single-argument calls produce bare output unchanged. Exit `2` if any argument failed, `0` otherwise.
 - **`unexpose` and `import remove` are idempotent.** Unexposing an item that isn't exposed, or removing an import that doesn't exist, is a successful no-op — not an error.
-- **`variant add` branches are `Debug.todo "<VariantName>"`.** If you want to fill them in with `elmq patch` afterward, `get` the destination first to see the exact placeholder text — do not guess.
+- **`variant add` inserts `Debug.todo "<VariantName>"` stubs by default.** Prefer `--fill` over patching stubs afterward — it collapses the write into one turn. Use `elmq variant cases` first to gather the context (enclosing function bodies + stable keys) you need to synthesize `--fill` bodies. Only fall back to `elmq patch` on the `Debug.todo` stubs when you genuinely need a second pass (e.g. the compiler revealed more context after the initial fill).

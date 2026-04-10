@@ -241,6 +241,40 @@ added SetName to Msg in src/Types.elm
 
 Appends a constructor to a custom type and inserts `Debug.todo` branches in all matching case expressions project-wide. Case expressions with wildcard (`_`) branches are skipped with an info message.
 
+To fill branch bodies in the same call, first survey the sites with `elmq variant cases`, then pass their keys to `--fill`:
+
+```sh
+elmq variant cases src/Types.elm --type Msg
+```
+
+```
+## case sites for type Types.Msg (2 files, 2 functions)
+
+### src/Update.elm
+
+#### update (key: update, line 12)
+update : Msg -> Model -> Model
+update msg model =
+    case msg of
+        Increment -> ...
+        Decrement -> ...
+
+### src/View.elm
+
+#### label (key: label, line 8)
+...
+```
+
+```sh
+elmq variant add src/Types.elm --type Msg "Reset" \
+  --fill 'update=Reset -> { model | count = 0 }' \
+  --fill 'label=Reset -> "reset"'
+```
+
+`variant cases` is read-only and returns every case expression project-wide that matches the target type, with its enclosing function body (including type annotation) and a stable site key. Pass those keys to `--fill <key>=<branch_text>` (repeatable) on `variant add` to replace the default `Debug.todo "<Variant>"` stub with real branch bodies in the same call. Unmatched fill keys fail validation before any file is touched; unfilled sites fall back to `Debug.todo` stubs (graceful degradation).
+
+When one function contains multiple case expressions on the same type, or two files both define a function with the same name, `variant cases` disambiguates with `function#N` or `file:function` keys. Passing an ambiguous bare key to `--fill` errors with the valid alternatives listed.
+
 ```sh
 elmq variant rm src/Types.elm --type Msg Decrement
 ```

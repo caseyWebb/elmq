@@ -288,16 +288,34 @@ fn run_command(cli: Cli) -> Result<i32> {
                 definition,
                 format,
                 dry_run,
+                fill,
             } => {
                 let canonical = file
                     .canonicalize()
                     .with_context(|| format!("file not found: {}", file.display()))?;
+
+                // Parse --fill values: split each `KEY=BRANCH` on the first `=`. Missing
+                // `=` is a user error (surface as a clap-style error with exit code 2).
+                let mut fills: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
+                for f in &fill {
+                    let Some(eq) = f.find('=') else {
+                        anyhow::bail!(
+                            "invalid --fill value '{}': expected KEY=BRANCH (missing '=')",
+                            f
+                        );
+                    };
+                    let (key, rest) = f.split_at(eq);
+                    let body = &rest[1..]; // skip the '='
+                    fills.insert(key.to_string(), body.to_string());
+                }
 
                 let result = elmq::variant::execute_add_variant(
                     &canonical,
                     &type_name,
                     &definition,
                     dry_run,
+                    fills,
                 )?;
 
                 match format {
@@ -319,6 +337,27 @@ fn run_command(cli: Cli) -> Result<i32> {
                                 skip.file, skip.line, skip.function, skip.reason
                             );
                         }
+                    }
+                    Format::Json => {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    }
+                }
+                Ok(0)
+            }
+            VariantCommand::Cases {
+                file,
+                type_name,
+                format,
+            } => {
+                let canonical = file
+                    .canonicalize()
+                    .with_context(|| format!("file not found: {}", file.display()))?;
+
+                let result = elmq::variant::execute_cases(&canonical, &type_name)?;
+
+                match format {
+                    Format::Compact => {
+                        render_cases_compact(&result);
                     }
                     Format::Json => {
                         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -371,6 +410,58 @@ fn run_command(cli: Cli) -> Result<i32> {
                 Ok(0)
             }
         },
+    }
+}
+
+// ---------------- variant cases (compact renderer) ----------------
+
+/// Render a `CasesResult` as human-readable Markdown-ish output. The format is the one
+/// specified in `openspec/changes/variant-fill/design.md` §7: headline, then one block
+/// per site with a sub-heading carrying the stable key, then the enclosing function
+/// body verbatim, then a skipped-sites footer if any wildcard branches were found.
+fn render_cases_compact(result: &elmq::variant::CasesResult) {
+    // Group sites by file for the "N files, M functions" headline and section headers.
+    let mut by_file: std::collections::BTreeMap<&str, Vec<&elmq::variant::CasesSite>> =
+        std::collections::BTreeMap::new();
+    for site in &result.sites {
+        by_file.entry(site.file.as_str()).or_default().push(site);
+    }
+
+    if result.sites.is_empty() {
+        println!("no case sites found for type {}", result.type_name);
+    } else {
+        println!(
+            "## case sites for type {} ({} file{}, {} function{})",
+            result.type_name,
+            by_file.len(),
+            if by_file.len() == 1 { "" } else { "s" },
+            result.sites.len(),
+            if result.sites.len() == 1 { "" } else { "s" },
+        );
+        println!();
+    }
+
+    for (file, sites) in &by_file {
+        println!("### {file}");
+        println!();
+        for site in sites {
+            println!(
+                "#### {} (key: {}, line {})",
+                site.function, site.key, site.line
+            );
+            println!("{}", site.body);
+            println!();
+        }
+    }
+
+    if !result.skipped.is_empty() {
+        println!("### skipped");
+        for skip in &result.skipped {
+            println!(
+                "- {}:{} {} — {}",
+                skip.file, skip.line, skip.function, skip.reason
+            );
+        }
     }
 }
 
