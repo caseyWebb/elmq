@@ -225,6 +225,14 @@ pub enum Command {
         #[arg(long)]
         include_strings: bool,
 
+        /// Only emit matches at the declaration name site (not call sites).
+        #[arg(long)]
+        definitions: bool,
+
+        /// Emit full declaration source for each matched decl, deduped by (file, decl).
+        #[arg(long)]
+        source: bool,
+
         /// Output format: compact `file:line:decl:text` (default) or NDJSON.
         #[arg(long, value_enum, default_value_t = GrepFormat::Compact)]
         format: GrepFormat,

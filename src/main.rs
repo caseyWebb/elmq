@@ -309,6 +309,8 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
             ignore_case,
             include_comments,
             include_strings,
+            definitions,
+            source,
             format,
         } => {
             let args = elmq::grep::GrepArgs {
@@ -318,6 +320,8 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
                 ignore_case,
                 include_comments,
                 include_strings,
+                definitions,
+                source,
                 format: match format {
                     GrepFormat::Compact => elmq::grep::GrepFormat::Compact,
                     GrepFormat::Json => elmq::grep::GrepFormat::Json,

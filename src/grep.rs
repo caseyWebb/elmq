@@ -35,6 +35,8 @@ pub struct GrepArgs {
     pub ignore_case: bool,
     pub include_comments: bool,
     pub include_strings: bool,
+    pub definitions: bool,
+    pub source: bool,
     pub format: GrepFormat,
 }
 
@@ -49,6 +51,9 @@ pub enum GrepFormat {
 struct DeclRange {
     start: usize,
     end: usize,
+    /// Byte range of the declaration's identifier (for `--definitions`).
+    name_start: usize,
+    name_end: usize,
     name: String,
     kind: &'static str,
 }
@@ -92,6 +97,18 @@ pub fn execute(args: GrepArgs) -> i32 {
     }
 }
 
+/// A buffered source-emission entry, keyed by `(file_display, decl_name)`.
+struct SourceEntry {
+    file_display: String,
+    module: Option<String>,
+    decl_name: String,
+    decl_kind: &'static str,
+    source_text: String,
+    start_line: usize,
+    end_line: usize,
+    match_count: usize,
+}
+
 fn run(args: &GrepArgs) -> Result<bool> {
     let regex = build_regex(args)?;
     let discovery = discover_files(args.path.as_deref())?;
@@ -101,6 +118,12 @@ fn run(args: &GrepArgs) -> Result<bool> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     let mut any_match = false;
+
+    // For --source mode: buffer source entries keyed by (file_display, decl_name).
+    // Insertion order is preserved via a Vec + seen set.
+    let mut source_entries: Vec<SourceEntry> = Vec::new();
+    let mut source_seen: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
 
     for file in &files {
         let source = match std::fs::read_to_string(file) {
@@ -144,9 +167,54 @@ fn run(args: &GrepArgs) -> Result<bool> {
                 continue;
             }
 
+            let enclosing = offset_to_decl(offset, &decl_ranges);
+
+            // --definitions: only emit if match offset falls within [name_start, name_end).
+            if args.definitions {
+                match enclosing {
+                    Some(decl) if offset >= decl.name_start && offset < decl.name_end => {}
+                    _ => continue,
+                }
+            }
+
+            if args.source {
+                // --source: skip matches outside any decl (they can't produce a source block).
+                let Some(decl) = enclosing else {
+                    continue;
+                };
+
+                let key = (file_display.clone(), decl.name.clone());
+                if source_seen.contains(&key) {
+                    // Already buffered; just increment count.
+                    if let Some(entry) = source_entries
+                        .iter_mut()
+                        .find(|e| e.file_display == key.0 && e.decl_name == key.1)
+                    {
+                        entry.match_count += 1;
+                    }
+                } else {
+                    source_seen.insert(key);
+                    let decl_source = &source[decl.start..decl.end];
+                    let start_line = line_col_at(&source, decl.start).0;
+                    let end_line = line_col_at(&source, decl.end.saturating_sub(1)).0;
+                    source_entries.push(SourceEntry {
+                        file_display: file_display.clone(),
+                        module: module.clone(),
+                        decl_name: decl.name.clone(),
+                        decl_kind: decl.kind,
+                        source_text: decl_source.to_string(),
+                        start_line,
+                        end_line,
+                        match_count: 1,
+                    });
+                }
+                any_match = true;
+                continue;
+            }
+
+            // Normal (non-source) mode: stream matches.
             let (line, column) = line_col_at(&source, offset);
             let line_text = source_line(&source, line);
-            let enclosing = offset_to_decl(offset, &decl_ranges);
 
             let hit = GrepMatch {
                 file_display: file_display.clone(),
@@ -162,9 +230,6 @@ fn run(args: &GrepArgs) -> Result<bool> {
             match emit(&mut out, &hit, args.format) {
                 Ok(()) => {}
                 Err(e) if is_broken_pipe(&e) => {
-                    // Downstream reader closed the pipe (e.g. `| head`). This
-                    // is the expected termination path for interactive use;
-                    // flush-and-exit silently rather than emitting an error.
                     out.flush().ok();
                     return Ok(any_match);
                 }
@@ -174,8 +239,66 @@ fn run(args: &GrepArgs) -> Result<bool> {
         }
     }
 
+    // --source: emit buffered source blocks.
+    if args.source && !source_entries.is_empty() {
+        emit_source_blocks(&mut out, &source_entries, args.format)?;
+    }
+
     out.flush().ok();
     Ok(any_match)
+}
+
+/// Emit buffered source blocks for `--source` mode.
+fn emit_source_blocks(
+    out: &mut impl Write,
+    entries: &[SourceEntry],
+    format: GrepFormat,
+) -> Result<()> {
+    match format {
+        GrepFormat::Compact => {
+            let bare = entries.len() == 1;
+            for (i, entry) in entries.iter().enumerate() {
+                if i > 0 {
+                    writeln!(out)?;
+                }
+                if !bare {
+                    let header =
+                        source_header(&entry.file_display, &entry.module, &entry.decl_name);
+                    writeln!(out, "## {header}")?;
+                }
+                // Emit the source text, ensuring a trailing newline.
+                write!(out, "{}", entry.source_text)?;
+                if !entry.source_text.ends_with('\n') {
+                    writeln!(out)?;
+                }
+            }
+        }
+        GrepFormat::Json => {
+            for entry in entries {
+                let value = serde_json::json!({
+                    "file": entry.file_display,
+                    "module": entry.module,
+                    "decl": entry.decl_name,
+                    "decl_kind": entry.decl_kind,
+                    "source": entry.source_text,
+                    "start_line": entry.start_line,
+                    "end_line": entry.end_line,
+                    "match_count": entry.match_count,
+                });
+                writeln!(out, "{}", serde_json::to_string(&value)?)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build a `## Module.decl` or `## file:decl` header for source blocks.
+fn source_header(file_display: &str, module: &Option<String>, decl_name: &str) -> String {
+    if let Some(m) = module {
+        format!("{m}.{decl_name}")
+    } else {
+        format!("{file_display}:{decl_name}")
+    }
 }
 
 /// Detect broken-pipe errors anywhere in the error chain.
@@ -314,12 +437,15 @@ fn collect_decl_ranges(tree: &Tree, source: &str) -> Vec<DeclRange> {
         let node = children[i];
         match node.kind() {
             "type_annotation" => {
-                let name = node_field_text(&node, "name", source).unwrap_or_default();
+                let (name, ns, ne) = node_field_name_range(&node, "name", source)
+                    .unwrap_or_else(|| (String::new(), node.start_byte(), node.start_byte()));
                 if i + 1 < children.len() && children[i + 1].kind() == "value_declaration" {
                     let val_node = children[i + 1];
                     ranges.push(DeclRange {
                         start: node.start_byte(),
                         end: val_node.end_byte(),
+                        name_start: ns,
+                        name_end: ne,
                         name,
                         kind: "function",
                     });
@@ -329,42 +455,56 @@ fn collect_decl_ranges(tree: &Tree, source: &str) -> Vec<DeclRange> {
                 ranges.push(DeclRange {
                     start: node.start_byte(),
                     end: node.end_byte(),
+                    name_start: ns,
+                    name_end: ne,
                     name,
                     kind: "function",
                 });
             }
             "value_declaration" => {
-                let name = value_decl_name(&node, source).unwrap_or_default();
+                let (name, ns, ne) = value_decl_name_range(&node, source)
+                    .unwrap_or_else(|| (String::new(), node.start_byte(), node.start_byte()));
                 ranges.push(DeclRange {
                     start: node.start_byte(),
                     end: node.end_byte(),
+                    name_start: ns,
+                    name_end: ne,
                     name,
                     kind: "function",
                 });
             }
             "type_declaration" => {
-                let name = node_field_text(&node, "name", source).unwrap_or_default();
+                let (name, ns, ne) = node_field_name_range(&node, "name", source)
+                    .unwrap_or_else(|| (String::new(), node.start_byte(), node.start_byte()));
                 ranges.push(DeclRange {
                     start: node.start_byte(),
                     end: node.end_byte(),
+                    name_start: ns,
+                    name_end: ne,
                     name,
                     kind: "type",
                 });
             }
             "type_alias_declaration" => {
-                let name = node_field_text(&node, "name", source).unwrap_or_default();
+                let (name, ns, ne) = node_field_name_range(&node, "name", source)
+                    .unwrap_or_else(|| (String::new(), node.start_byte(), node.start_byte()));
                 ranges.push(DeclRange {
                     start: node.start_byte(),
                     end: node.end_byte(),
+                    name_start: ns,
+                    name_end: ne,
                     name,
                     kind: "type_alias",
                 });
             }
             "port_annotation" => {
-                let name = node_field_text(&node, "name", source).unwrap_or_default();
+                let (name, ns, ne) = node_field_name_range(&node, "name", source)
+                    .unwrap_or_else(|| (String::new(), node.start_byte(), node.start_byte()));
                 ranges.push(DeclRange {
                     start: node.start_byte(),
                     end: node.end_byte(),
+                    name_start: ns,
+                    name_end: ne,
                     name,
                     kind: "port",
                 });
@@ -425,17 +565,20 @@ fn extract_module_name(tree: &Tree, source: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn node_field_text(node: &Node, field: &str, source: &str) -> Option<String> {
+/// Return (name_text, name_start_byte, name_end_byte) for a named field.
+fn node_field_name_range(node: &Node, field: &str, source: &str) -> Option<(String, usize, usize)> {
     let child = node.child_by_field_name(field)?;
-    Some(child.utf8_text(source.as_bytes()).ok()?.to_string())
+    let text = child.utf8_text(source.as_bytes()).ok()?.to_string();
+    Some((text, child.start_byte(), child.end_byte()))
 }
 
-fn value_decl_name(node: &Node, source: &str) -> Option<String> {
+fn value_decl_name_range(node: &Node, source: &str) -> Option<(String, usize, usize)> {
     let fdl = node.child_by_field_name("functionDeclarationLeft")?;
     let mut cursor = fdl.walk();
     for child in fdl.named_children(&mut cursor) {
         if child.kind() == "lower_case_identifier" {
-            return Some(child.utf8_text(source.as_bytes()).ok()?.to_string());
+            let text = child.utf8_text(source.as_bytes()).ok()?.to_string();
+            return Some((text, child.start_byte(), child.end_byte()));
         }
     }
     None
@@ -658,6 +801,8 @@ type Msg
             ignore_case: false,
             include_comments: false,
             include_strings: false,
+            definitions: false,
+            source: false,
             format: GrepFormat::Compact,
         };
         let re = build_regex(&args).unwrap();
@@ -674,6 +819,8 @@ type Msg
             ignore_case: true,
             include_comments: false,
             include_strings: false,
+            definitions: false,
+            source: false,
             format: GrepFormat::Compact,
         };
         let re = build_regex(&args).unwrap();
@@ -690,6 +837,8 @@ type Msg
             ignore_case: false,
             include_comments: false,
             include_strings: false,
+            definitions: false,
+            source: false,
             format: GrepFormat::Compact,
         };
         assert!(build_regex(&args).is_err());

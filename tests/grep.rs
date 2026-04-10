@@ -792,3 +792,337 @@ fn parse_failure_file_still_reports_matches_with_null_decl() {
         .expect("Ok.elm hit present");
     assert_eq!(ok_hit["decl"].as_str(), Some("foo"));
 }
+
+// ---------------------------------------------------------------------------
+// --definitions tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn definitions_emits_decl_site() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    write_file(root, "src/Main.elm", API_ELM);
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--definitions", "fetchUsers"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("fetchUsers"),
+        "definitions should emit the decl-site match:\n{stdout}"
+    );
+    // Should be exactly one match line (the decl site).
+    let match_lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        match_lines.len(),
+        1,
+        "expected exactly 1 definition-site match but got {}:\n{stdout}",
+        match_lines.len()
+    );
+}
+
+#[test]
+fn definitions_filters_call_sites() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    write_file(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nupdate x = x\n\nview = update 1\n",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--definitions", "update"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    // Only the definition site, not the call site in `view`.
+    assert_eq!(lines.len(), 1, "expected 1 definition but got:\n{stdout}");
+    assert!(
+        lines[0].contains(":update:"),
+        "line should attribute to 'update':\n{stdout}"
+    );
+}
+
+#[test]
+fn definitions_filters_imports() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    write_file(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nimport Http\n\nfoo = 1\n",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--definitions", "Http"])
+        .output()
+        .unwrap();
+
+    // No decl named "Http" → no definitions → exit 1.
+    assert_eq!(output.status.code(), Some(1));
+}
+
+// ---------------------------------------------------------------------------
+// --source tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn source_dedupes_multiple_matches() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    write_file(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nfoo = bar + bar + bar\n",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--source", "bar"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Single decl → bare (no ## header), emitted once despite 3 matches.
+    assert!(
+        !stdout.contains("##"),
+        "single decl should be bare:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("foo = bar + bar + bar"),
+        "source should be present:\n{stdout}"
+    );
+}
+
+#[test]
+fn source_two_files_module_framing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    write_file(
+        root,
+        "src/Foo.elm",
+        "module Foo exposing (..)\n\nfoo = thing\n",
+    );
+    write_file(
+        root,
+        "src/Bar.elm",
+        "module Bar exposing (..)\n\nbar = thing\n",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--source", "thing"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Two decls → ## Module.decl framing.
+    assert!(
+        stdout.contains("## Bar.bar") || stdout.contains("## Foo.foo"),
+        "should have Module.decl headers:\n{stdout}"
+    );
+}
+
+#[test]
+fn source_fallback_framing_no_elm_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // No elm.json — but grep extracts module names from AST (the `module X
+    // exposing (..)` line), so framing is still ## Module.decl.
+    write_file(root, "A.elm", "module A exposing (..)\n\na = thing\n");
+    write_file(root, "B.elm", "module B exposing (..)\n\nb = thing\n");
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--source", "thing"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Module names from AST: ## Module.decl
+    assert!(
+        stdout.contains("## A.a") && stdout.contains("## B.b"),
+        "should have Module.decl headers from AST:\n{stdout}"
+    );
+}
+
+#[test]
+fn source_skips_import_matches_exits_1() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    write_file(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nimport Http\n\nfoo = 1\n",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--source", "Http"])
+        .output()
+        .unwrap();
+
+    // Only match is in import line (outside any decl) → no source block → exit 1.
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn definitions_source_combination() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    write_file(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nupdate x = x\n\nview = update 1\n",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--definitions", "--source", "update"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Only the definition's source, not `view`'s source.
+    assert!(
+        stdout.contains("update x = x"),
+        "should contain update source:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("view"),
+        "should NOT contain view source:\n{stdout}"
+    );
+}
+
+#[test]
+fn source_single_block_is_bare() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    write_file(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nfoo = target\n\nbar = 2\n",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--source", "target"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.contains("##"),
+        "single source block should be bare:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("foo = target"),
+        "should contain foo source:\n{stdout}"
+    );
+}
+
+#[test]
+fn source_json_ndjson_with_match_count() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    write_file(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nfoo = bar + bar\n\nbaz = bar\n",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--source", "--format", "json", "bar"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let records: Vec<Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+
+    assert_eq!(records.len(), 2, "expected 2 NDJSON records:\n{stdout}");
+
+    // foo has 2 matches of "bar", baz has 1.
+    let foo_rec = records.iter().find(|r| r["decl"] == "foo").unwrap();
+    assert_eq!(foo_rec["match_count"], 2);
+    assert!(foo_rec["source"].as_str().unwrap().contains("bar + bar"));
+    assert!(foo_rec["module"].as_str().is_some());
+    assert!(foo_rec["file"].as_str().is_some());
+    assert!(foo_rec["start_line"].is_number());
+    assert!(foo_rec["end_line"].is_number());
+
+    let baz_rec = records.iter().find(|r| r["decl"] == "baz").unwrap();
+    assert_eq!(baz_rec["match_count"], 1);
+}
+
+#[test]
+fn source_json_module_from_ast_without_elm_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // No elm.json — grep extracts module name from the file's AST.
+    write_file(root, "A.elm", "module A exposing (..)\n\na = thing\n");
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--source", "--format", "json", "thing"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let rec: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        rec["module"].as_str(),
+        Some("A"),
+        "module should come from AST:\n{stdout}"
+    );
+}
+
+#[test]
+fn definitions_zero_defs_exits_1() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_elm_json(root, &["src"]);
+    // "bar" appears only as a call site inside foo's body, never as a decl name.
+    write_file(
+        root,
+        "src/Main.elm",
+        "module Main exposing (..)\n\nfoo = bar\n",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["grep", "--definitions", "bar"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+}

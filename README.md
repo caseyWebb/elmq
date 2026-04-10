@@ -310,6 +310,13 @@ Regex search over Elm files (Rust `regex` dialect, same as ripgrep) that annotat
 
 Project discovery walks up for `elm.json` and honors its `source-directories`; if no `elm.json` is found, falls back to recursively walking the CWD. Both paths honor `.gitignore`. Exit codes match ripgrep: `0` on matches, `1` on none, `2` on error.
 
+Two additional flags enable one-call definition lookup and source retrieval:
+
+- `--definitions` — only emit matches at the declaration name site (filters out call sites)
+- `--source` — emit full declaration source for each matched decl, deduped by `(file, decl)`. Output is framed `## Module.decl` (single result stays bare).
+
+Combine them for definition lookup: `elmq grep --definitions --source 'update'` returns the full source of the `update` declaration without any call-site noise.
+
 Pipe into `elmq get` for a find-then-retrieve workflow:
 
 ```sh
