@@ -76,6 +76,81 @@ jobs:
         with:
           files: elmq-${{ github.ref_name }}-${{ matrix.target }}.*
 
+  npm-publish:
+    name: Publish npm packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release download "$VERSION" \
+            --repo caseyWebb/elmq \
+            --pattern "elmq-${VERSION}-*.tar.gz" \
+            --dir /tmp/release
+
+      - name: Publish platform packages
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION_NUM="${VERSION#v}"
+
+          publish_platform() {
+            local npm_name="$1"
+            local rust_target="$2"
+
+            local pkg_dir="/tmp/npm-stage/${npm_name}"
+            mkdir -p "$pkg_dir"
+            cp "npm/${npm_name}/package.json" "$pkg_dir/"
+
+            # Stamp version
+            cd "$pkg_dir"
+            npm version "$VERSION_NUM" --no-git-tag-version
+
+            # Extract binary from tarball
+            tar xzf "/tmp/release/elmq-${VERSION}-${rust_target}.tar.gz" -C "$pkg_dir"
+
+            npm publish --access public --provenance
+            cd -
+          }
+
+          publish_platform "darwin-arm64" "aarch64-apple-darwin"
+          publish_platform "darwin-x64"   "x86_64-apple-darwin"
+          publish_platform "linux-arm64"  "aarch64-unknown-linux-musl"
+          publish_platform "linux-x64"    "x86_64-unknown-linux-musl"
+
+      - name: Publish root package
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION_NUM="${VERSION#v}"
+
+          pkg_dir="/tmp/npm-stage/elmq"
+          mkdir -p "$pkg_dir"
+          cp npm/elmq/package.json npm/elmq/run.js "$pkg_dir/"
+
+          cd "$pkg_dir"
+
+          # Stamp version and update optionalDependency versions
+          npm version "$VERSION_NUM" --no-git-tag-version
+          for dep in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            npm pkg set "optionalDependencies.@caseywebb/elmq-${dep}=${VERSION_NUM}"
+          done
+
+          npm publish --access public --provenance
+
   homebrew:
     name: Update Homebrew formula
     needs: build
