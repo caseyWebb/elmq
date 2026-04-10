@@ -34,13 +34,15 @@ src/Api.elm:42:fetchData:    Http.get { url = "/items" }
 $ elmq get src/Api.elm fetchData
 ```
 
-> **Do not `rg` inside the Elm tree.** `rg` returns `file:line:text`, which forces you to read the whole file to figure out which function each hit belongs to — that is the exact token cost `elmq grep` exists to eliminate. `elmq grep` does the offset → enclosing-decl mapping for free via tree-sitter, and filters comment/string noise by default. Reach for `rg` only on non-`.elm` files.
+> **Use `rg` only on non-`.elm` files.** `elmq grep` gives you the enclosing decl for free and filters comment/string noise — `rg` can't do either.
 
 ## Reading Elm code
 
 `elmq list` and `elmq get` are targeted exploration tools — use them on files and declarations you need to understand, not carte blanche on the whole project. If you already know the file but not the decl, `list` it; if `elmq grep` already told you the decl name, skip straight to `get`.
 
-**Fetch only what you need for the current step.** Avoid bulk reads like `elmq get src/Foo.elm Type1 Type2 fn1 fn2 fn3 fn4 fn5` — that dumps the entire module's logic into context at once. Instead, fetch the 2-3 declarations relevant to your current edit, then fetch more as needed. Each `elmq get` result stays in context for the rest of the session.
+`elmq list` shows each file's line count. For files under ~200 lines, `Read`+`Edit` is simpler. For larger files, use `elmq get`/`patch` to avoid pulling the full source into context.
+
+**Fetch only what you need for the current step.** Fetch the 2-3 declarations relevant to your current edit, then fetch more as needed — don't bulk-read an entire module at once.
 
 - `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. Add `--docs` for doc comments. Accepts one or more files in a single call.
 - `elmq get <file> <name...>` — full source of one or more declarations from the same file.
@@ -80,27 +82,16 @@ elmq move-decl src/Types.elm \
 
 Do not manually reconstruct this with `Write` + `rm` + `import add` + find-and-replace. `move-decl` handles the entire dependency graph in a single atomic operation.
 
-### Adding a variant with branch bodies (the three-turn pattern)
+### Adding a variant with branch bodies (two turns)
 
-`elmq variant add` inserts `Debug.todo "<Variant>"` stubs into every matching case expression by default. Patching them one-by-one afterward is a turn sink — a single call with `--fill` can write real branch bodies in the same operation. The workflow is:
-
-1. **`elmq variant cases <file> --type <T>`** — read-only. Returns every case expression in the project that matches on `T`, with the enclosing function body and a stable `key` per site. Read it once to plan bodies.
-2. **`elmq variant add <file> --type <T> '<Variant>' --fill key=branch ...`** — atomic write. Inserts the variant into the type declaration and fills each case branch from `--fill`. Sites you omit from `--fill` fall back to `Debug.todo` stubs (graceful degradation).
-3. **`elm make`** — verify.
-
-Worked example:
+1. **`elmq variant cases <file> --type <T>`** — returns every case site with its enclosing function body and a stable `key`. This is all the context you need — don't grep or get the type definition separately.
+2. **`elmq variant add <file> --type <T> '<Variant>' --fill key=branch ...`** — inserts the variant and fills each case branch. Sites you omit fall back to `Debug.todo` stubs. Then use `elmq patch`/`set` for any non-case dispatch (list-based, parser combinators, etc.) that `--fill` can't reach.
 
 ```
-# 1. Plan: see all case expressions on the type.
 $ elmq variant cases src/Theme.elm --type Theme
-
-# 2. Write: add the variant and fill every case branch.
-#    Only keys from `variant cases` output are valid --fill targets.
 $ elmq variant add src/Theme.elm --type Theme 'HighContrast' \
     --fill 'toClass=HighContrast -> "theme-high-contrast"' \
     --fill 'toCssVars=HighContrast -> highContrastVars'
-
-# 3. Verify once.
 $ elm make src/Main.elm
 ```
 
@@ -124,15 +115,9 @@ ELM
 
 Prefer `elmq patch` for fragment edits (new case branch, record field, parameter, body tweak); reserve `elmq set` for whole-body rewrites.
 
-## Working efficiently (minimize turns, not just tokens)
+**Trust your edits.** If `elmq patch`/`set` exited `0`, it applied exactly what you asked for — don't re-read to "verify." Only re-read when the compiler complains. **Compile at the end, not after every edit** — batch all edits, then run `elm make` once.
 
-Every tool call is another assistant turn, and each turn re-pays the cache-read tax. Token wins come from **fewer turns**, not from clever syntax inside a turn. Two rules flow from that:
+## Reference notes
 
-- **Trust your edits. Don't re-read after a successful `elmq patch` / `elmq set`.** If the command exited `0` it applied exactly what you asked for — re-running `elmq get` to "verify" is pure overhead. Only re-read when the Elm compiler complains and you need to see current state to debug. (If you need the post-edit text for a follow-up patch, you already had it: it's what you put in `--new`.)
-- **Compile at the end, not after every edit.** For a multi-step change (add a variant, wire it through `update`/`view`/`subscriptions`, add an import, etc.), do all the edits first and run `elm make` once at the very end. Each intermediate `elm make` is a ~10s round-trip *and* a tool-result payload the model then has to re-read on the next turn. Batch the work, compile once, fix whatever the compiler actually reports. An exception: if you're unsure a structural change (new module file, new type) will even parse, one early compile is worth it — but stop there until the full change is in place.
-
-## Gotchas
-
-- **Multi-argument output is framed.** Commands that accept `<...>` positional rest (`list`, `get`, `rm`, `refs`, `import add`, `import remove`, `expose`, `unexpose`, `move-decl`) run best-effort per argument: a bad argument does not abort the others. With two or more arguments, output is `## <arg>` blocks in input order, with per-argument errors rendered inline as `error: …` on stdout (not stderr). Single-argument calls produce bare output unchanged. Exit `2` if any argument failed, `0` otherwise.
-- **`unexpose` and `import remove` are idempotent.** Unexposing an item that isn't exposed, or removing an import that doesn't exist, is a successful no-op — not an error.
-- **`variant add` inserts `Debug.todo "<VariantName>"` stubs by default.** Prefer `--fill` over patching stubs afterward — it collapses the write into one turn. Use `elmq variant cases` first to gather the context (enclosing function bodies + stable keys) you need to synthesize `--fill` bodies. Only fall back to `elmq patch` on the `Debug.todo` stubs when you genuinely need a second pass (e.g. the compiler revealed more context after the initial fill).
+- **Multi-arg framing.** Commands accepting `<name...>` run best-effort per argument. With 2+ args, output is `## <arg>` blocks; errors are inline `error: …` on stdout. Exit `2` if any arg failed.
+- **`unexpose` / `import remove` are idempotent** — removing something that isn't there is a no-op, not an error.

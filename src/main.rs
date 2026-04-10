@@ -522,8 +522,11 @@ fn run_list(files: Vec<PathBuf>, format: Format, docs: bool) -> Result<i32> {
         .map(|f| {
             let arg = f.display().to_string();
             let result: ItemResult = match load_and_parse(f) {
-                Ok((_, summary)) => match format {
-                    Format::Compact => Ok(format_compact(&summary, docs)),
+                Ok((source, summary)) => match format {
+                    Format::Compact => {
+                        let line_count = source.lines().count();
+                        Ok(format_compact(&summary, docs, line_count))
+                    }
                     Format::Json => format_json(&summary).map_err(|e| err_to_line(&e)),
                 },
                 Err(e) => Err(err_to_line(&e)),
@@ -1063,9 +1066,9 @@ fn format_refs_body(matches: &[refs::RefMatch], format: &Format) -> String {
 
 // ---------------- formatters ----------------
 
-fn format_compact(summary: &FileSummary, show_docs: bool) -> String {
+fn format_compact(summary: &FileSummary, show_docs: bool, line_count: usize) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "{}", summary.module_line);
+    let _ = writeln!(out, "{}  ({} lines)", summary.module_line, line_count);
 
     if !summary.imports.is_empty() {
         out.push('\n');

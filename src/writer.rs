@@ -291,7 +291,7 @@ fn exposing_base_name(item: &str) -> &str {
 
 /// Find the full module declaration, which may span multiple lines.
 /// Returns the complete text from `module`/`port module` through the closing `)` of `exposing`.
-fn find_module_declaration(source: &str) -> Result<String> {
+pub(crate) fn find_module_declaration(source: &str) -> Result<String> {
     let mut start = None;
     for (i, line) in source.lines().enumerate() {
         if start.is_none()
@@ -314,7 +314,7 @@ fn find_module_declaration(source: &str) -> Result<String> {
     bail!("no module declaration found")
 }
 
-fn extract_exposing_content(module_decl: &str) -> Result<String> {
+pub(crate) fn extract_exposing_content(module_decl: &str) -> Result<String> {
     let exposing_idx = module_decl
         .find("exposing")
         .with_context(|| "module declaration has no exposing clause")?;

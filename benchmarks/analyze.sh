@@ -479,15 +479,28 @@ print_detail_row() {
         "$pass_cell_color" "${pass}/${runs}"  "$C_RESET"
 
     # Sub-row: standard deviation for COST and TURNS (dim, only when n>1)
+    # Yellow when coefficient of variation (σ/μ) > 50% — high relative spread.
     if [ "$runs" -gt 1 ]; then
-        local cost_sd turns_sd
+        local cost_sd turns_sd cost_sd_color turns_sd_color
         cost_sd=$(agg_get COST_SD "$scenario" "$arm"); cost_sd=${cost_sd:-0}
         turns_sd=$(agg_get TURNS_SD "$scenario" "$arm"); turns_sd=${turns_sd:-0}
-        printf "%-20s %-10s %10s %10s %11s %10s %s%10s%s %s%7s%s %7s %7s\n" \
-            "" "" "" "" "" "" \
-            "$C_DIM" "±$(format_cost "$cost_sd")" "$C_RESET" \
-            "$C_DIM" "±${turns_sd}" "$C_RESET" \
-            "" ""
+        cost_sd_color=$(awk -v sd="$cost_sd" -v m="$cost" \
+            'BEGIN { print (m > 0 && sd/m > 0.5) ? 1 : 0 }')
+        turns_sd_color=$(awk -v sd="$turns_sd" -v m="$turns" \
+            'BEGIN { print (m > 0 && sd/m > 0.5) ? 1 : 0 }')
+        local c_cost_sd="$C_DIM" c_turns_sd="$C_DIM"
+        [ "$cost_sd_color" = "1" ] && c_cost_sd="$C_YELLOW"
+        [ "$turns_sd_color" = "1" ] && c_turns_sd="$C_YELLOW"
+        # Build the sub-row by right-aligning ± values into fixed-width strings,
+        # then placing them at the exact column offsets of COST and TURNS.
+        local cost_sd_val="±$(format_cost "$cost_sd")"
+        local turns_sd_val="±${turns_sd}"
+        printf -v cost_sd_val '%10s' "$cost_sd_val"
+        printf -v turns_sd_val '%7s' "$turns_sd_val"
+        # 72 spaces = columns before COST (20 scenario + 1 sp + 10 arm + 1 sp + 10+10+11+10 data fields)
+        printf '%72s%s%s%s %s%s%s\n' "" \
+            "$c_cost_sd" "$cost_sd_val" "$C_RESET" \
+            "$c_turns_sd" "$turns_sd_val" "$C_RESET"
     fi
 }
 

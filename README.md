@@ -35,7 +35,7 @@ elmq list src/Main.elm
 ```
 
 ```
-module Main exposing (Model, Msg(..), update, view)
+module Main exposing (Model, Msg(..), update, view)  (38 lines)
 
 imports:
   Html exposing (Html, div, text)
