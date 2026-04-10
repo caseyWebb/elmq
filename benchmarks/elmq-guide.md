@@ -80,6 +80,13 @@ ELM
 
 Prefer `elmq patch` for fragment edits (new case branch, record field, parameter, body tweak); reserve `elmq set` for whole-body rewrites.
 
+## Working efficiently (minimize turns, not just tokens)
+
+Every tool call is another assistant turn, and each turn re-pays the cache-read tax. Token wins come from **fewer turns**, not from clever syntax inside a turn. Two rules flow from that:
+
+- **Trust your edits. Don't re-read after a successful `elmq patch` / `elmq set`.** If the command exited `0` it applied exactly what you asked for — re-running `elmq get` to "verify" is pure overhead. Only re-read when the Elm compiler complains and you need to see current state to debug. (If you need the post-edit text for a follow-up patch, you already had it: it's what you put in `--new`.)
+- **Compile at the end, not after every edit.** For a multi-step change (add a variant, wire it through `update`/`view`/`subscriptions`, add an import, etc.), do all the edits first and run `elm make` once at the very end. Each intermediate `elm make` is a ~10s round-trip *and* a tool-result payload the model then has to re-read on the next turn. Batch the work, compile once, fix whatever the compiler actually reports. An exception: if you're unsure a structural change (new module file, new type) will even parse, one early compile is worth it — but stop there until the full change is in place.
+
 ## Gotchas
 
 - **Multi-argument output is framed.** Commands that accept `<...>` positional rest (`list`, `get`, `rm`, `refs`, `import add`, `import remove`, `expose`, `unexpose`, `move-decl`) run best-effort per argument: a bad argument does not abort the others. With two or more arguments, output is `## <arg>` blocks in input order, with per-argument errors rendered inline as `error: …` on stdout (not stderr). Single-argument calls produce bare output unchanged. Exit `2` if any argument failed, `0` otherwise.

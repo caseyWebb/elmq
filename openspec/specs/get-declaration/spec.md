@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Extract declaration source by name
-The `elmq get <file> <name>` command SHALL extract the full source text of a top-level declaration matching `<name>` from the given Elm file. The extracted text SHALL include the doc comment (if present), type annotation (if present), and the complete declaration body, preserving original formatting.
+The `elmq get <file> <name> [<name>...]` command SHALL extract the full source text of each named top-level declaration from the given Elm file, in input order. For each name, the extracted text SHALL include the doc comment (if present), type annotation (if present), and the complete declaration body, preserving original formatting. Multi-name invocations SHALL frame output per the shared `## <arg>` block rule in `cli-scaffold`; single-name invocations SHALL produce bare output.
 
 #### Scenario: Get a function with type annotation
 - **WHEN** `elmq get Main.elm update` is run and `Main.elm` contains a function `update` with a type annotation
-- **THEN** the output SHALL contain the type annotation line(s) followed by the full function body, exactly as written in the source file
+- **THEN** the output SHALL contain the type annotation line(s) followed by the full function body, exactly as written in the source file, with no `## update` header
 
 #### Scenario: Get a function without type annotation
 - **WHEN** `elmq get Main.elm helper` is run and `helper` has no type annotation
@@ -27,12 +27,20 @@ The `elmq get <file> <name>` command SHALL extract the full source text of a top
 - **WHEN** `elmq get Main.elm sendMessage` is run and `sendMessage` is a port
 - **THEN** the output SHALL contain the port annotation line
 
-### Requirement: Declaration not found error
-The command SHALL exit with a non-zero exit code and print an error message to stderr when no declaration with the given name exists in the file.
+#### Scenario: Get multiple declarations
+- **WHEN** `elmq get Main.elm update view init` is run and all three declarations exist
+- **THEN** the output SHALL contain `## update`, `## view`, and `## init` blocks in that order, each body being the same source text the single-name form would produce
 
-#### Scenario: Declaration does not exist
+### Requirement: Declaration not found error
+The command SHALL treat "declaration not found" as a per-name error. In a single-name invocation, the process SHALL exit with status `2` and print an error message. In a multi-name invocation, the failing name's `## <name>` block SHALL contain `error: declaration '<name>' not found`, the other names SHALL still be processed, and the process SHALL exit with status `2` if any name failed.
+
+#### Scenario: Single-name not found
 - **WHEN** `elmq get Main.elm nonExistent` is run and no declaration named `nonExistent` exists
-- **THEN** the process SHALL exit with a non-zero exit code and print a message to stderr indicating the declaration was not found
+- **THEN** the process SHALL exit with status `2` and print `error: declaration 'nonExistent' not found` (or equivalent) to stdout
+
+#### Scenario: Multi-name partial not found
+- **WHEN** `elmq get Main.elm update nonExistent view` is run and only `update` and `view` exist
+- **THEN** the output SHALL contain `## update` (with source), `## nonExistent` (with `error: declaration 'nonExistent' not found`), and `## view` (with source) in that order, and the process SHALL exit with status `2`
 
 ### Requirement: JSON output format
 The command SHALL support `--format json` which outputs a JSON object containing the declaration's name, kind, source text, start line, and end line.
