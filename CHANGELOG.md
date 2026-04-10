@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 (2026-04-10)
+
+## What's Changed
+* chore(deps): Bump tree-sitter from 0.26.7 to 0.26.8 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/23
+* chore(deps): Bump tokio from 1.50.0 to 1.51.0 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/24
+* refactor!: drop mcp server; add oracle benchmark treatment arm by @caseyWebb in https://github.com/caseyWebb/elmq/pull/22
+* feat: agent optimization — CLI enhancements, benchmark harness, and elmq grep by @caseyWebb in https://github.com/caseyWebb/elmq/pull/26
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.3.0...v0.4.0
+
 ## 0.3.0 (2026-03-28)
 
 ## What's Changed
