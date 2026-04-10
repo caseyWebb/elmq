@@ -1,0 +1,12 @@
+{
+  "name": "@caseywebb/elmq-linux-x64",
+  "version": "0.0.0",
+  "description": "elmq binary for Linux x64",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caseyWebb/elmq.git"
+  },
+  "os": ["linux"],
+  "cpu": ["x64"]
+}

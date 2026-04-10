@@ -18,6 +18,18 @@ Designed as a next-gen LSP for agents and scripts, not editors. Optimized for to
 brew install caseyWebb/tap/elmq
 ```
 
+### npm
+
+```sh
+npm install -g @caseywebb/elmq
+```
+
+Or run without installing:
+
+```sh
+npx @caseywebb/elmq <command>
+```
+
 ### From source
 
 Requires [Rust](https://rustup.rs/):

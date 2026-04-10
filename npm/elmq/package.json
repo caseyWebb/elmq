@@ -1,0 +1,19 @@
+{
+  "name": "@caseywebb/elmq",
+  "version": "0.0.0",
+  "description": "Query and edit Elm files — like jq for Elm",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caseyWebb/elmq.git"
+  },
+  "bin": {
+    "elmq": "run.js"
+  },
+  "optionalDependencies": {
+    "@caseywebb/elmq-darwin-arm64": "0.0.0",
+    "@caseywebb/elmq-darwin-x64": "0.0.0",
+    "@caseywebb/elmq-linux-arm64": "0.0.0",
+    "@caseywebb/elmq-linux-x64": "0.0.0"
+  }
+}
