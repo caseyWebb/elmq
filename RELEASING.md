@@ -60,6 +60,17 @@ npm packages are published via [Trusted Publishing](https://docs.npmjs.com/gener
 3. Set repository: `caseyWebb/elmq`, workflow: `release.yml`
 4. Repeat for each platform package (`elmq-darwin-arm64`, `elmq-darwin-x64`, `elmq-linux-arm64`, `elmq-linux-x64`)
 
+## Plugin Releases
+
+The Claude Code plugin (`.claude-plugin/`) is a second release-please package with its own version and release cycle.
+
+- **Tags**: `elmq-plugin-vX.Y.Z` (vs `vX.Y.Z` for the CLI)
+- **No build artifacts** — the marketplace reads directly from the repo
+- **Independent versioning** — guide-only wording fixes release the plugin without a CLI release
+- **Coupled when needed** — commits touching both CLI and plugin files create releases for both, so the guide never references unreleased CLI features
+
+The plugin version is tracked in `.claude-plugin/plugin.json` and `.claude-plugin/version.txt`. release-please bumps both automatically.
+
 ## Branch Protection
 
 The `main` branch has a ruleset requiring all CI checks to pass before merging:

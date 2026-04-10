@@ -10,6 +10,7 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.target }})
+    if: startsWith(github.event.release.tag_name, 'v') && !contains(github.event.release.tag_name, 'elmq-plugin')
     permissions:
       contents: write
       id-token: write
@@ -244,6 +245,16 @@ jobs:
   publish-release:
     name: Publish release
     needs: [build, npm-publish, homebrew]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ github.ref_name }}" --repo caseyWebb/elmq --draft=false
+
+  publish-plugin-release:
+    name: Publish plugin release
+    if: startsWith(github.event.release.tag_name, 'elmq-plugin-')
     runs-on: ubuntu-latest
     steps:
       - name: Publish draft release
