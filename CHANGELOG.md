@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 (2026-04-10)
+
+## What's Changed
+* fix: use draft releases to support immutable release assets by @caseyWebb in https://github.com/caseyWebb/elmq/pull/33
+* feat: add SLSA build provenance attestations for release binaries by @caseyWebb in https://github.com/caseyWebb/elmq/pull/35
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.5.0...v0.6.0
+
 ## 0.5.0 (2026-04-10)
 
 ## What's Changed
