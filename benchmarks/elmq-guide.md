@@ -17,7 +17,16 @@ When you don't already know the name of the declaration you need to touch, start
 - Project discovery is automatic: walks ancestors for `elm.json` (works from monorepo subdirs), falls back to walking CWD recursively if none is found, honors `.gitignore` in both paths.
 - Exit codes match `rg`: `0` match, `1` no match, `2` error — safe in pipelines.
 
-Typical discovery → retrieval flow:
+One-call definition lookup:
+
+```
+$ elmq grep --definitions --source 'fetchUsers'
+fetchUsers : Cmd msg
+fetchUsers =
+    Http.get { url = "/users" }
+```
+
+Or the two-step flow when you want locator lines first, then selective retrieval:
 
 ```
 $ elmq grep 'Http\.get'
