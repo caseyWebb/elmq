@@ -1306,12 +1306,14 @@ fn validate_fills(fills: &HashMap<String, String>, keys: &[String]) -> Result<()
             ));
         } else if keys.is_empty() {
             errors.push(format!(
-                "no case site matched fill key: {} (project has no case expressions on this type)",
+                "no case site matched fill key: {} (project has no case expressions on this type)\n  \
+                 hint: --fill only targets case expressions; use `elmq patch` for list-based dispatch (e.g. parser combinators)",
                 fill_key
             ));
         } else {
             errors.push(format!(
-                "no case site matched fill key: {}\n  valid keys: {}",
+                "no case site matched fill key: {}\n  valid keys: {}\n  \
+                 hint: --fill only targets case expressions; use `elmq patch` for list-based dispatch (e.g. parser combinators)",
                 fill_key,
                 keys.join(", ")
             ));

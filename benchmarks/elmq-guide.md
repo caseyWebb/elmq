@@ -12,7 +12,7 @@ This is an Elm project. `elmq` is on PATH — a tree-sitter-aware CLI for readin
 When you don't already know the name of the declaration you need to touch, start with `elmq grep`. It regex-searches `.elm` files and, for each hit, reports the enclosing top-level declaration — so you can pipe directly into `elmq get` without ever reading a whole file.
 
 - `elmq grep <regex> [path]` — compact output is `file:line:decl:line_text` (`-` in the decl slot means the match is outside any top-level decl, e.g. imports or the module header).
-- Flags: `-F` literal, `-i` ignore case, `--format json` for machine pipelines, `--definitions` (only emit matches at the declaration name site, filtering out call sites), `--source` (emit full declaration source for each matched decl, deduped — replaces the locator lines with actual code). Combine `--definitions --source` for one-call definition lookup: `elmq grep --definitions --source 'submitForm'`.
+- Flags: `-F` literal, `-i` ignore case, `--format json` for machine pipelines, `--definitions` (only emit matches at the declaration name site, filtering out call sites), `--source` (emit full declaration source for each matched decl, deduped — replaces the locator lines with actual code). Combine `--definitions --source` for one-call definition lookup: `elmq grep --definitions --source 'myFunction'`.
 - **Comments and string literals are filtered by default.** That is the whole point — it keeps discovery signal clean. Opt back in only when you specifically want them: `--include-comments` for `TODO` / docstring hunts, `--include-strings` for user-facing error messages.
 - Project discovery is automatic: walks ancestors for `elm.json` (works from monorepo subdirs), falls back to walking CWD recursively if none is found, honors `.gitignore` in both paths.
 - Exit codes match `rg`: `0` match, `1` no match, `2` error — safe in pipelines.
@@ -20,18 +20,18 @@ When you don't already know the name of the declaration you need to touch, start
 One-call definition lookup:
 
 ```
-$ elmq grep --definitions --source 'fetchUsers'
-fetchUsers : Cmd msg
-fetchUsers =
-    Http.get { url = "/users" }
+$ elmq grep --definitions --source 'myFunction'
+myFunction : Int -> String
+myFunction n =
+    String.fromInt n
 ```
 
 Or the two-step flow when you want locator lines first, then selective retrieval:
 
 ```
 $ elmq grep 'Http\.get'
-src/Api.elm:42:fetchUsers:    Http.get { url = "/users" }
-$ elmq get src/Api.elm fetchUsers
+src/Api.elm:42:fetchData:    Http.get { url = "/items" }
+$ elmq get src/Api.elm fetchData
 ```
 
 > **Do not `rg` inside the Elm tree.** `rg` returns `file:line:text`, which forces you to read the whole file to figure out which function each hit belongs to — that is the exact token cost `elmq grep` exists to eliminate. `elmq grep` does the offset → enclosing-decl mapping for free via tree-sitter, and filters comment/string noise by default. Reach for `rg` only on non-`.elm` files.
@@ -39,6 +39,8 @@ $ elmq get src/Api.elm fetchUsers
 ## Reading Elm code
 
 `elmq list` and `elmq get` are targeted exploration tools — use them on files and declarations you need to understand, not carte blanche on the whole project. If you already know the file but not the decl, `list` it; if `elmq grep` already told you the decl name, skip straight to `get`.
+
+**Fetch only what you need for the current step.** Avoid bulk reads like `elmq get src/Foo.elm Type1 Type2 fn1 fn2 fn3 fn4 fn5` — that dumps the entire module's logic into context at once. Instead, fetch the 2-3 declarations relevant to your current edit, then fetch more as needed. Each `elmq get` result stays in context for the rest of the session.
 
 - `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. Add `--docs` for doc comments. Accepts one or more files in a single call.
 - `elmq get <file> <name...>` — full source of one or more declarations from the same file.
@@ -63,20 +65,20 @@ Reach for the highest-level command that matches the intent. The project-wide co
 | Remove declarations | `elmq rm <file> <name...>` |
 | Add imports | `elmq import add <file> 'Html exposing (Html, div)' ...` |
 | Remove imports | `elmq import remove <file> Html ...` |
-| Add to exposing list | `elmq expose <file> update ...` (or `'Msg(..)'`) |
-| Remove from exposing list | `elmq unexpose <file> helper ...` |
+| Add to exposing list | `elmq expose <file> name ...` (or `'Type(..)'`) |
+| Remove from exposing list | `elmq unexpose <file> name ...` |
 
 ### Extracting declarations into a new module
 
-A task like *"extract `Cred`, `username`, `credHeader`, `credDecoder` from `src/Api.elm` into a new `src/Api/Cred.elm`"* is one `elmq move-decl` call:
+`elmq move-decl` handles extraction in one call — it creates the target file, moves the declarations, updates `exposing (…)` lists on both sides, and rewrites every qualified reference in the project:
 
 ```
-elmq move-decl src/Api.elm \
-  --to src/Api/Cred.elm \
-  Cred username credHeader credDecoder
+elmq move-decl src/Types.elm \
+  --to src/Types/Auth.elm \
+  Token validate decode encode
 ```
 
-`move-decl` creates the target file, removes the declarations from the source, updates both files' `exposing (…)` lists, and rewrites every qualified reference in the project to use the new module path.
+Do not manually reconstruct this with `Write` + `rm` + `import add` + find-and-replace. `move-decl` handles the entire dependency graph in a single atomic operation.
 
 ### Adding a variant with branch bodies (the three-turn pattern)
 
@@ -86,27 +88,25 @@ elmq move-decl src/Api.elm \
 2. **`elmq variant add <file> --type <T> '<Variant>' --fill key=branch ...`** — atomic write. Inserts the variant into the type declaration and fills each case branch from `--fill`. Sites you omit from `--fill` fall back to `Debug.todo` stubs (graceful degradation).
 3. **`elm make`** — verify.
 
-Worked example for adding a `Bookmarks` page to a router:
+Worked example:
 
 ```
-# 1. Plan: see all case expressions on Route and Page.
-$ elmq variant cases src/Route.elm --type Route
-$ elmq variant cases src/Page.elm  --type Page
+# 1. Plan: see all case expressions on the type.
+$ elmq variant cases src/Theme.elm --type Theme
 
-# 2. Write: add the variant and fill every branch in one shot.
-$ elmq variant add src/Route.elm --type Route 'Bookmarks' \
-    --fill 'routeToPieces=Bookmarks -> [ "bookmarks" ]' \
-    --fill 'parser=Parser.map Bookmarks (s "bookmarks")'
-
-$ elmq variant add src/Page.elm --type Page 'Bookmarks' \
-    --fill 'viewMenu=Bookmarks -> ...' \
-    --fill 'isActive=( Bookmarks, Route.Bookmarks ) -> True'
+# 2. Write: add the variant and fill every case branch.
+#    Only keys from `variant cases` output are valid --fill targets.
+$ elmq variant add src/Theme.elm --type Theme 'HighContrast' \
+    --fill 'toClass=HighContrast -> "theme-high-contrast"' \
+    --fill 'toCssVars=HighContrast -> highContrastVars'
 
 # 3. Verify once.
 $ elm make src/Main.elm
 ```
 
-Keys come verbatim from the `cases` output. In the common case the bare function name works (`update`, `view`, `parser`). When one function has two case expressions on the same type, or two files both define a function with the same name, `cases` prints disambiguated keys (`update#1`, `update#2`, or `src/Main.elm:update`) — pass those through. If you pass an ambiguous bare key, `variant add` errors with the valid disambiguated alternatives before touching any file.
+**`--fill` keys must come from `variant cases` output.** `--fill` only targets `case` expressions. Functions that reference the type through list-based dispatch (e.g. building a list of items per variant, parser combinator lists) will not appear as case sites — use `elmq patch` for those. Always run `variant cases` first so you know which keys are valid before calling `variant add`.
+
+When one function has two case expressions on the same type, or two files both define a function with the same name, `cases` prints disambiguated keys (`handler#1`, `handler#2`, or `src/Other.elm:handler`) — pass those through. If you pass an ambiguous bare key, `variant add` errors with the valid disambiguated alternatives before touching any file.
 
 `--fill` values are `KEY=BRANCH` pairs split on the **first** `=`, so branch bodies containing `=` (e.g. record updates) are fine. The branch text is inserted verbatim with proper indentation; write the full `Pattern -> body` as you would type it into the source.
 
@@ -115,9 +115,10 @@ Keys come verbatim from the `cases` output. In the common case the bare function
 `elmq set` reads source from stdin via heredoc:
 
 ```
-elmq set src/Main.elm << 'ELM'
-update : Msg -> Model -> ( Model, Cmd Msg )
-update msg model = ...
+elmq set src/Helpers.elm << 'ELM'
+clamp : comparable -> comparable -> comparable -> comparable
+clamp low high value =
+    max low (min high value)
 ELM
 ```
 
