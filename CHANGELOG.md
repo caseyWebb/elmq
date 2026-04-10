@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 (2026-04-10)
+
+## What's Changed
+* feat: embed agent guide in binary, simplify release pipeline by @caseyWebb in https://github.com/caseyWebb/elmq/pull/59
+* fix: split release into two workflows for re-runnability by @caseyWebb in https://github.com/caseyWebb/elmq/pull/61
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/elmq-v0.6.0...elmq-v0.7.0
+
 ## 0.6.0 (2026-04-10)
 
 ## What's Changed
