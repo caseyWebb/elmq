@@ -9,13 +9,15 @@ elmq uses [release-please](https://github.com/googleapis/release-please) for aut
 ## How It Works
 
 1. **Squash merge to main** — PRs are squash-merged using the PR title as the commit message. PR titles must follow conventional commit format (enforced by CI).
-2. **Release PR** — `release-please.yml` creates (or updates) a PR that bumps the version in `Cargo.toml` and updates `CHANGELOG.md`
-3. **Publish** — merging the release PR creates a GitHub Release with a git tag (`vX.Y.Z`). Because release-please uses a PAT (`RELEASE_TOKEN`), this fires a `release: published` event.
-4. **Build** — `release.yml` triggers on the published event, builds binaries for 5 targets, and attaches them to the release
-5. **npm** — platform-specific packages and the root `@caseywebb/elmq` package are published to npmjs.org
-6. **Homebrew** — the Homebrew formula in [caseyWebb/homebrew-tap](https://github.com/caseyWebb/homebrew-tap) is automatically updated
+2. **Release PR** — release-please creates (or updates) a PR that bumps the version in `Cargo.toml` and updates `CHANGELOG.md`
+3. **Tag** — merging the release PR creates a git tag (`vX.Y.Z`) but skips creating the GitHub Release
+4. **CI** — format, lint, and tests run against the tagged commit
+5. **Build** — binaries are compiled for 5 targets
+6. **Publish** — a GitHub Release is created with all build artifacts attached
+7. **npm** — platform-specific packages and the root `@caseywebb/elmq` package are published to npmjs.org
+8. **Homebrew** — the Homebrew formula in [caseyWebb/homebrew-tap](https://github.com/caseyWebb/homebrew-tap) is automatically updated
 
-If the build, npm, or Homebrew steps fail, `release.yml` can be re-run from the Actions UI without involving release-please.
+Steps 3–8 run in a single workflow. If any step fails, the release has not been published, so fixing and re-pushing to main will trigger a clean retry.
 
 ## Version Bumps
 
@@ -59,7 +61,7 @@ npm packages are published via [Trusted Publishing](https://docs.npmjs.com/gener
 
 1. Go to the package settings page on npmjs.com (e.g. `https://www.npmjs.com/package/@caseywebb/elmq/access`)
 2. Under "Publishing access", configure GitHub Actions as a trusted publisher
-3. Set repository: `caseyWebb/elmq`, workflow: `release.yml`
+3. Set repository: `caseyWebb/elmq`, workflow: `release-please.yml`
 4. Repeat for each platform package (`elmq-darwin-arm64`, `elmq-darwin-x64`, `elmq-linux-arm64`, `elmq-linux-x64`)
 
 ## Branch Protection
