@@ -259,14 +259,3 @@ jobs:
           git add Formula/elmq.rb
           git commit -m "elmq ${TAG}"
           git push
-
-  publish-release:
-    name: Publish release
-    needs: [release-please, build, npm-publish, homebrew]
-    if: ${{ needs.release-please.outputs.release_created }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish draft release
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: gh release edit "${{ needs.release-please.outputs.tag_name }}" --repo caseyWebb/elmq --draft=false
