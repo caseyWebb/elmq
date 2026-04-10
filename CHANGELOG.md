@@ -5,6 +5,18 @@
 ## What's Changed
 * fix: use draft releases to support immutable release assets by @caseyWebb in https://github.com/caseyWebb/elmq/pull/33
 * feat: add SLSA build provenance attestations for release binaries by @caseyWebb in https://github.com/caseyWebb/elmq/pull/35
+* chore(main): release 0.6.0 by @caseyWebb in https://github.com/caseyWebb/elmq/pull/34
+* feat: add Claude Code plugin with SessionStart hook for elmq guidance by @caseyWebb in https://github.com/caseyWebb/elmq/pull/36
+* fix: reset version to 0.5.0 after orphaned release-please bump by @caseyWebb in https://github.com/caseyWebb/elmq/pull/37
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.5.0...v0.6.0
+
+## 0.6.0 (2026-04-10)
+
+## What's Changed
+* fix: use draft releases to support immutable release assets by @caseyWebb in https://github.com/caseyWebb/elmq/pull/33
+* feat: add SLSA build provenance attestations for release binaries by @caseyWebb in https://github.com/caseyWebb/elmq/pull/35
 
 
 **Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.5.0...v0.6.0
