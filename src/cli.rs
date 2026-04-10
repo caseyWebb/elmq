@@ -189,6 +189,8 @@ pub enum Command {
         #[command(subcommand)]
         command: VariantCommand,
     },
+    /// Print the agent integration guide
+    Guide,
     /// Search for a regex in Elm sources, annotated with enclosing top-level declaration.
     ///
     /// This is the discovery entry point: use `elmq grep` to locate text in Elm files

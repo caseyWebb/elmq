@@ -99,6 +99,11 @@ fn run() -> i32 {
 
 fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32> {
     match cli.command {
+        Command::Guide => {
+            print!("{}", include_str!("guide.md"));
+            Ok(0)
+        }
+
         Command::List {
             files,
             format,

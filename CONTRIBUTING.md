@@ -31,6 +31,7 @@ src/
 ├── main.rs       # CLI entry point, output formatting
 ├── cli.rs        # clap argument definitions
 ├── lib.rs        # public types (Declaration, DeclarationKind)
+├── guide.md      # agent integration guide (compiled into binary via include_str!)
 ├── imports.rs    # import context abstraction (resolve, emit, merge imports)
 ├── move_decl.rs  # move declarations between modules with body rewriting
 ├── parser.rs     # tree-sitter-elm parsing and declaration extraction
@@ -44,7 +45,7 @@ src/
 
 ## Testing
 
-Unit tests live alongside the code in `parser.rs`, `imports.rs`, `writer.rs`, `project.rs`, and `refs.rs`. Integration tests are in `tests/` with one file per command (`get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `variant.rs`). Run with `cargo test`.
+Unit tests live alongside the code in `parser.rs`, `imports.rs`, `writer.rs`, `project.rs`, and `refs.rs`. Integration tests are in `tests/` with one file per command (`get.rs`, `set.rs`, `patch.rs`, `rm.rs`, `import.rs`, `expose.rs`, `mv.rs`, `refs.rs`, `rename.rs`, `move_decl.rs`, `variant.rs`, `grep.rs`, `guide.rs`). Run with `cargo test`.
 
 Test fixtures are in `test-fixtures/`. When adding parser features, add or update the sample Elm files there and write corresponding tests. Integration tests use `tempfile` to create temporary copies for write operations.
 

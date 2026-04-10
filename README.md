@@ -340,6 +340,14 @@ elmq grep --format json "Http\.get" \
 
 Matches that land outside any top-level declaration (imports, module header) report `decl: null` in JSON and an empty decl slot in compact output.
 
+### Agent integration guide
+
+```sh
+elmq guide
+```
+
+Prints the built-in agent integration guide to stdout. This is the guide that tells LLM coding agents how to use elmq effectively — when to prefer `elmq get` over `Read`, how to chain edits, etc. The Claude Code plugin (`/plugin install elmq@caseyWebb`) uses this automatically via a SessionStart hook.
+
 ### JSON output
 
 ```sh
@@ -364,9 +372,11 @@ elmq list src/Main.elm --format json
 
 ## Using elmq with LLM coding agents
 
-elmq is designed to be used from any coding agent that can shell out to a CLI (Claude Code, Cursor, Aider, Codex, etc.) — pair it with a system prompt or skill that tells the agent to prefer `elmq <subcommand>` over generic `Read`/`Write`/`Edit` on `.elm` files.
+elmq is designed to be used from any coding agent that can shell out to a CLI (Claude Code, Cursor, Aider, Codex, etc.). The built-in agent guide (`elmq guide`) tells agents how to use elmq effectively.
 
-Dedicated LLM-harness packaging (Claude Code plugin, skill, npm wrapper, etc.) is deferred until the benchmark in `benchmarks/` proves the token-savings thesis against a baseline. Until then, the CLI is the supported interface.
+**Claude Code**: Install the plugin with `/plugin install elmq@caseyWebb`. It automatically injects the guide into sessions working in Elm projects.
+
+**Other agents**: Pipe `elmq guide` into your agent's system prompt or project instructions.
 
 ## Roadmap
 
