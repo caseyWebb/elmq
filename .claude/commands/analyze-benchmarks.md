@@ -103,7 +103,7 @@ For each scenario, show:
 - Redundant operations found
 - Context growth curve (which turns caused biggest jumps)
 
-### Recommendations for elmq-guide.md
+### Recommendations for the elmq guide
 Concrete changes to the treatment guidance that would reduce token usage:
 - Guidance to add/modify
 - Anti-patterns to warn against

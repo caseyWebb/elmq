@@ -69,7 +69,7 @@ run_arm() {
     # any subagents spawned via the Task tool (Explore, etc). The empirical basis
     # is in openspec/changes/elmq-guide-v2/design.md §"Delivery mechanism".
     if [[ "$arm" == "treatment" ]]; then
-        cp "$BENCH_DIR/elmq-guide.md" "$work_dir/CLAUDE.md"
+        elmq guide > "$work_dir/CLAUDE.md"
     fi
 
     git add -A

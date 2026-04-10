@@ -5,7 +5,7 @@ Measures token usage of Claude Code on identical Elm coding tasks. Two arms so w
 | Arm | What's different |
 |-----|-----------------|
 | `control` | No elmq guidance — Claude works with built-in Read/Write/Edit/Grep on the fixture |
-| `treatment` | elmq CLI guidance (`.claude-plugin/elmq-guide.md`) delivered as `CLAUDE.md` in the treatment workdir (propagates to subagents) |
+| `treatment` | elmq CLI guidance (`elmq guide`) delivered as `CLAUDE.md` in the treatment workdir (propagates to subagents) |
 
 The treatment arm is deliberately the simplest possible delivery mechanism. Q2 ("which delivery mechanism is best?" — skill vs. hook vs. MCP vs. something else) is a separate, future experiment that can only be evaluated once Q1 has an answer.
 

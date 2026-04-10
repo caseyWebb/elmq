@@ -5,23 +5,7 @@
       "release-type": "rust",
       "changelog-type": "github",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": false,
-      "component": "elmq",
-      "include-component-in-tag": true
-    },
-    ".claude-plugin": {
-      "release-type": "simple",
-      "changelog-type": "github",
-      "bump-minor-pre-major": true,
-      "component": "elmq-plugin",
-      "include-component-in-tag": true,
-      "extra-files": [
-        {
-          "type": "json",
-          "path": "plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
+      "bump-patch-for-minor-pre-major": false
     }
   }
 }
