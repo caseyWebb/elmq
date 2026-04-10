@@ -9,11 +9,13 @@ elmq uses [release-please](https://github.com/googleapis/release-please) for aut
 ## How It Works
 
 1. **Squash merge to main** — PRs are squash-merged using the PR title as the commit message. PR titles must follow conventional commit format (enforced by CI).
-2. **Release PR** — release-please creates (or updates) a PR that bumps the version in `Cargo.toml` and updates `CHANGELOG.md`
-3. **Publish** — merging the release PR creates a GitHub Release with a git tag (`vX.Y.Z`)
-4. **Build** — the release workflow builds binaries for 5 targets and attaches them to the release
+2. **Release PR** — `release-please.yml` creates (or updates) a PR that bumps the version in `Cargo.toml` and updates `CHANGELOG.md`
+3. **Publish** — merging the release PR creates a GitHub Release with a git tag (`vX.Y.Z`). Because release-please uses a PAT (`RELEASE_TOKEN`), this fires a `release: published` event.
+4. **Build** — `release.yml` triggers on the published event, builds binaries for 5 targets, and attaches them to the release
 5. **npm** — platform-specific packages and the root `@caseywebb/elmq` package are published to npmjs.org
 6. **Homebrew** — the Homebrew formula in [caseyWebb/homebrew-tap](https://github.com/caseyWebb/homebrew-tap) is automatically updated
+
+If the build, npm, or Homebrew steps fail, `release.yml` can be re-run from the Actions UI without involving release-please.
 
 ## Version Bumps
 

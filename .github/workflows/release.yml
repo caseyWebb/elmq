@@ -1,0 +1,244 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use-cross: false
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use-cross: true
+          - target: x86_64-apple-darwin
+            os: macos-15
+            use-cross: false
+          - target: aarch64-apple-darwin
+            os: macos-14
+            use-cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use-cross: false
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use-cross
+        run: cargo install cross --locked
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Add Rust target
+        if: "!matrix.use-cross"
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.use-cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../elmq-${TAG}-${{ matrix.target }}.tar.gz elmq
+        shell: bash
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../elmq-${TAG}-${{ matrix.target }}.zip elmq.exe
+        shell: bash
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: elmq-${{ env.TAG }}-${{ matrix.target }}.*
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: elmq-${{ env.TAG }}-${{ matrix.target }}.*
+
+  npm-publish:
+    name: Publish npm packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$TAG" \
+            --repo caseyWebb/elmq \
+            --pattern "elmq-${TAG}-*.tar.gz" \
+            --dir /tmp/release
+
+      - name: Publish platform packages
+        run: |
+          VERSION_NUM="${TAG#v}"
+
+          publish_platform() {
+            local npm_name="$1"
+            local rust_target="$2"
+
+            local pkg_dir="/tmp/npm-stage/${npm_name}"
+            mkdir -p "$pkg_dir"
+            cp "npm/${npm_name}/package.json" "$pkg_dir/"
+
+            # Stamp version
+            cd "$pkg_dir"
+            npm version "$VERSION_NUM" --no-git-tag-version
+
+            # Extract binary from tarball
+            tar xzf "/tmp/release/elmq-${TAG}-${rust_target}.tar.gz" -C "$pkg_dir"
+
+            npm publish --access public --provenance
+            cd -
+          }
+
+          publish_platform "darwin-arm64" "aarch64-apple-darwin"
+          publish_platform "darwin-x64"   "x86_64-apple-darwin"
+          publish_platform "linux-arm64"  "aarch64-unknown-linux-musl"
+          publish_platform "linux-x64"    "x86_64-unknown-linux-musl"
+
+      - name: Publish root package
+        run: |
+          VERSION_NUM="${TAG#v}"
+
+          pkg_dir="/tmp/npm-stage/elmq"
+          mkdir -p "$pkg_dir"
+          cp npm/elmq/package.json npm/elmq/run.js "$pkg_dir/"
+
+          cd "$pkg_dir"
+
+          # Stamp version and update optionalDependency versions
+          npm version "$VERSION_NUM" --no-git-tag-version
+          for dep in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            npm pkg set "optionalDependencies.@caseywebb/elmq-${dep}=${VERSION_NUM}"
+          done
+
+          npm publish --access public --provenance
+
+  homebrew:
+    name: Update Homebrew formula
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Checkout tap repo
+        uses: actions/checkout@v6
+        with:
+          repository: caseyWebb/homebrew-tap
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Download release assets and update formula
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          VERSION_NUM="${TAG#v}"
+
+          # Download all archives to compute checksums
+          gh release download "$TAG" \
+            --repo caseyWebb/elmq \
+            --pattern "elmq-${TAG}-*.tar.gz" \
+            --pattern "elmq-${TAG}-*.zip" \
+            --dir /tmp/release
+
+          # Compute SHA256 checksums
+          SHA_LINUX_X86=$(sha256sum /tmp/release/elmq-${TAG}-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_ARM=$(sha256sum /tmp/release/elmq-${TAG}-aarch64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_X86=$(sha256sum /tmp/release/elmq-${TAG}-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_ARM=$(sha256sum /tmp/release/elmq-${TAG}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+
+          mkdir -p Formula
+
+          cat > Formula/elmq.rb << FORMULA
+          class Elmq < Formula
+            desc "Query and edit Elm files — like jq for Elm"
+            homepage "https://github.com/caseyWebb/elmq"
+            version "${VERSION_NUM}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/caseyWebb/elmq/releases/download/${TAG}/elmq-${TAG}-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_ARM}"
+              else
+                url "https://github.com/caseyWebb/elmq/releases/download/${TAG}/elmq-${TAG}-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_X86}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/caseyWebb/elmq/releases/download/${TAG}/elmq-${TAG}-aarch64-unknown-linux-musl.tar.gz"
+                sha256 "${SHA_LINUX_ARM}"
+              else
+                url "https://github.com/caseyWebb/elmq/releases/download/${TAG}/elmq-${TAG}-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "${SHA_LINUX_X86}"
+              end
+            end
+
+            def install
+              bin.install "elmq"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/elmq --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' Formula/elmq.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/elmq.rb
+          git commit -m "elmq ${TAG}"
+          git push
