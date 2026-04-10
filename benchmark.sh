@@ -100,7 +100,7 @@ fi
 
 mkdir -p "$LOGS_DIR"
 
-TIMESTAMP_BASE="$(date -u +%Y-%m-%dT%H:%M:%S)"
+TIMESTAMP_BASE="$(date -u +%Y-%m-%dT%H%M%S)"
 total_runs=$(( ${#ARMS[@]} * N ))
 
 echo "Launching $total_runs benchmark run(s) in parallel:"
