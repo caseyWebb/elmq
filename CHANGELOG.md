@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.4 (2026-04-13)
+
+## What's Changed
+* fix: concurrency, release-only builds, npm trusted publishing by @caseyWebb in https://github.com/caseyWebb/elmq/pull/71
+* fix: bump node to 24 for trusted publishing and benchmark consistency by @caseyWebb in https://github.com/caseyWebb/elmq/pull/73
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.7.3...v0.7.4
+
 ## 0.7.3 (2026-04-13)
 
 ## What's Changed
