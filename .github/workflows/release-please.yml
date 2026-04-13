@@ -189,8 +189,8 @@ jobs:
             cd "$pkg_dir"
             npm version "$VERSION_NUM" --no-git-tag-version
 
-            # Extract binary from tarball
-            tar xzf "$GITHUB_WORKSPACE/artifacts/elmq-${TAG}-${rust_target}.tar.gz" -C "$pkg_dir"
+            # Extract binary from tarball (artifacts named without tag prefix)
+            tar xzf "$GITHUB_WORKSPACE/artifacts/elmq-${rust_target}.tar.gz" -C "$pkg_dir"
 
             npm publish --access public --provenance
             cd -
@@ -242,11 +242,12 @@ jobs:
         run: |
           VERSION_NUM="${TAG#v}"
 
-          # Compute SHA256 checksums
-          SHA_LINUX_X86=$(sha256sum artifacts/elmq-${TAG}-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
-          SHA_LINUX_ARM=$(sha256sum artifacts/elmq-${TAG}-aarch64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
-          SHA_MACOS_X86=$(sha256sum artifacts/elmq-${TAG}-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
-          SHA_MACOS_ARM=$(sha256sum artifacts/elmq-${TAG}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+          # Compute SHA256 checksums (artifacts named without tag prefix)
+          set -euo pipefail
+          SHA_LINUX_X86=$(sha256sum artifacts/elmq-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_ARM=$(sha256sum artifacts/elmq-aarch64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_X86=$(sha256sum artifacts/elmq-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_ARM=$(sha256sum artifacts/elmq-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
 
           mkdir -p Formula
 
