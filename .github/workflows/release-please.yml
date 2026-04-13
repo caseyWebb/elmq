@@ -8,6 +8,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 jobs:
   ci:
     name: CI
@@ -19,9 +23,24 @@ jobs:
       - run: cargo clippy -- -D warnings
       - run: cargo test
 
+  release-please:
+    needs: ci
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.RELEASE_TOKEN }}
+
   build:
     name: Build (${{ matrix.target }})
-    needs: ci
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
     strategy:
       matrix:
         include:
@@ -41,6 +60,8 @@ jobs:
             os: windows-latest
             use-cross: false
     runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v6
 
@@ -73,40 +94,25 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../elmq-${{ matrix.target }}.tar.gz elmq
+          tar czf ../../../elmq-${TAG}-${{ matrix.target }}.tar.gz elmq
         shell: bash
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../elmq-${{ matrix.target }}.zip elmq.exe
+          7z a ../../../elmq-${TAG}-${{ matrix.target }}.zip elmq.exe
         shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: elmq-${{ matrix.target }}
-          path: elmq-${{ matrix.target }}.*
-
-  release-please:
-    needs: [ci, build]
-    runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-    steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-          token: ${{ secrets.RELEASE_TOKEN }}
+          path: elmq-${{ env.TAG }}-${{ matrix.target }}.*
 
   publish:
     name: Publish release
-    needs: [ci, build, release-please]
-    if: ${{ needs.release-please.outputs.release_created }}
+    needs: [release-please, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -122,13 +128,6 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-
-      - name: Rename artifacts with tag
-        run: |
-          cd artifacts
-          for f in elmq-*; do
-            mv "$f" "${f/elmq-/elmq-${TAG}-}"
-          done
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
@@ -189,8 +188,8 @@ jobs:
             cd "$pkg_dir"
             npm version "$VERSION_NUM" --no-git-tag-version
 
-            # Extract binary from tarball (artifacts named without tag prefix)
-            tar xzf "$GITHUB_WORKSPACE/artifacts/elmq-${rust_target}.tar.gz" -C "$pkg_dir"
+            # Extract binary from tarball
+            tar xzf "$GITHUB_WORKSPACE/artifacts/elmq-${TAG}-${rust_target}.tar.gz" -C "$pkg_dir"
 
             npm publish --access public --provenance
             cd -
@@ -240,14 +239,14 @@ jobs:
 
       - name: Update formula
         run: |
+          set -euo pipefail
           VERSION_NUM="${TAG#v}"
 
-          # Compute SHA256 checksums (artifacts named without tag prefix)
-          set -euo pipefail
-          SHA_LINUX_X86=$(sha256sum artifacts/elmq-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
-          SHA_LINUX_ARM=$(sha256sum artifacts/elmq-aarch64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
-          SHA_MACOS_X86=$(sha256sum artifacts/elmq-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
-          SHA_MACOS_ARM=$(sha256sum artifacts/elmq-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
+          # Compute SHA256 checksums
+          SHA_LINUX_X86=$(sha256sum artifacts/elmq-${TAG}-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_ARM=$(sha256sum artifacts/elmq-${TAG}-aarch64-unknown-linux-musl.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_X86=$(sha256sum artifacts/elmq-${TAG}-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)
+          SHA_MACOS_ARM=$(sha256sum artifacts/elmq-${TAG}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)
 
           mkdir -p Formula
 
