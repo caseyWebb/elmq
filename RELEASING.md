@@ -9,13 +9,16 @@ elmq uses [release-please](https://github.com/googleapis/release-please) for aut
 ## How It Works
 
 1. **Squash merge to main** — PRs are squash-merged using the PR title as the commit message. PR titles must follow conventional commit format (enforced by CI).
-2. **CI + Build** — every push to main runs CI (fmt, clippy, test) and cross-compiles release binaries for all 5 targets. Artifacts are uploaded via `actions/upload-artifact`.
-3. **Release PR** — release-please runs after CI and Build pass. It creates (or updates) a PR that bumps the version in `Cargo.toml` and updates `CHANGELOG.md`. When a release PR merges, it creates a **draft** GitHub Release (`draft: true` in config).
-4. **Publish** — the publish job downloads the already-built artifacts, uploads them to the draft release with `gh release upload`, then flips the draft to published with `gh release edit --draft=false`.
-5. **npm** — platform-specific packages and the root `@caseywebb/elmq` package are published to npmjs.org
-6. **Homebrew** — the Homebrew formula in [caseyWebb/homebrew-tap](https://github.com/caseyWebb/homebrew-tap) is automatically updated
+2. **CI** — every push to main runs fmt, clippy, and tests on ubuntu
+3. **Release PR** — release-please runs after CI. It creates (or updates) a PR that bumps the version in `Cargo.toml` and updates `CHANGELOG.md`. When a release PR merges, release-please creates a **draft** GitHub Release and a git tag.
+4. **Build** — cross-compiles release binaries for all 5 targets. Only runs when `release_created` is true, so non-release pushes don't waste CI minutes on matrix builds. Artifacts are uploaded via `actions/upload-artifact` with the tag baked into the filename.
+5. **Publish** — downloads the artifacts, uploads them to the draft release with `gh release upload`, then flips the draft to published with `gh release edit --draft=false`.
+6. **npm** — platform-specific packages and the root `@caseywebb/elmq` package are published to npmjs.org
+7. **Homebrew** — the Homebrew formula in [caseyWebb/homebrew-tap](https://github.com/caseyWebb/homebrew-tap) is automatically updated
 
 Assets are attached to the draft before the release is published, so the immutable release constraint never kicks in — the release becomes immutable only after it's been published with all assets in place. This is GitHub's [officially recommended pattern](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases) for immutable releases.
+
+The workflow uses a `concurrency` group (`release-main`, `cancel-in-progress: false`) so multiple pushes to main are processed sequentially. This prevents race conditions where two workflow runs might try to handle the same release PR merge at the same time.
 
 ## Version Bumps
 
