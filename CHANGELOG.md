@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.2 (2026-04-13)
+
+## What's Changed
+* fix: build before release to sidestep immutable release constraint by @caseyWebb in https://github.com/caseyWebb/elmq/pull/64
+* fix: disable component prefix in release-please tags by @caseyWebb in https://github.com/caseyWebb/elmq/pull/65
+* fix: use draft releases for immutable release compatibility by @caseyWebb in https://github.com/caseyWebb/elmq/pull/66
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.7.1...v0.7.2
+
 ## 0.7.1 (2026-04-10)
 
 ## What's Changed
