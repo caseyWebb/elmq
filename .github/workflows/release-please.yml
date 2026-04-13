@@ -9,24 +9,8 @@ permissions:
   pull-requests: write
 
 jobs:
-  release-please:
-    runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-    steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-          token: ${{ secrets.RELEASE_TOKEN }}
-          skip-github-release: true
-
   ci:
     name: CI
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -37,8 +21,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.target }})
-    needs: [release-please, ci]
-    if: ${{ needs.release-please.outputs.release_created }}
+    needs: ci
     strategy:
       matrix:
         include:
@@ -58,8 +41,6 @@ jobs:
             os: windows-latest
             use-cross: false
     runs-on: ${{ matrix.os }}
-    env:
-      TAG: ${{ needs.release-please.outputs.tag_name }}
     steps:
       - uses: actions/checkout@v6
 
@@ -92,25 +73,40 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../elmq-${TAG}-${{ matrix.target }}.tar.gz elmq
+          tar czf ../../../elmq-${{ matrix.target }}.tar.gz elmq
         shell: bash
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../elmq-${TAG}-${{ matrix.target }}.zip elmq.exe
+          7z a ../../../elmq-${{ matrix.target }}.zip elmq.exe
         shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: elmq-${{ matrix.target }}
-          path: elmq-${{ env.TAG }}-${{ matrix.target }}.*
+          path: elmq-${{ matrix.target }}.*
+
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.RELEASE_TOKEN }}
+          skip-github-release: true
 
   publish:
     name: Publish release
-    needs: [release-please, build]
+    needs: [ci, build, release-please]
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -126,6 +122,13 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Rename artifacts with tag
+        run: |
+          cd artifacts
+          for f in elmq-*; do
+            mv "$f" "${f/elmq-/elmq-${TAG}-}"
+          done
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2

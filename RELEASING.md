@@ -9,15 +9,13 @@ elmq uses [release-please](https://github.com/googleapis/release-please) for aut
 ## How It Works
 
 1. **Squash merge to main** — PRs are squash-merged using the PR title as the commit message. PR titles must follow conventional commit format (enforced by CI).
-2. **Release PR** — release-please creates (or updates) a PR that bumps the version in `Cargo.toml` and updates `CHANGELOG.md`
-3. **Tag** — merging the release PR creates a git tag (`vX.Y.Z`) but skips creating the GitHub Release
-4. **CI** — format, lint, and tests run against the tagged commit
-5. **Build** — binaries are compiled for 5 targets
-6. **Publish** — a GitHub Release is created with all build artifacts attached
-7. **npm** — platform-specific packages and the root `@caseywebb/elmq` package are published to npmjs.org
-8. **Homebrew** — the Homebrew formula in [caseyWebb/homebrew-tap](https://github.com/caseyWebb/homebrew-tap) is automatically updated
+2. **CI + Build** — every push to main runs CI (fmt, clippy, test) and cross-compiles release binaries for all 5 targets. Artifacts are uploaded via `actions/upload-artifact`.
+3. **Release PR** — release-please creates (or updates) a PR that bumps the version in `Cargo.toml` and updates `CHANGELOG.md`. Runs in parallel with CI and Build.
+4. **Publish** — when a release PR merges, release-please outputs `release_created: true`. The publish job downloads the already-built artifacts and creates a GitHub Release with all assets in one shot (via `gh release create`).
+5. **npm** — platform-specific packages and the root `@caseywebb/elmq` package are published to npmjs.org
+6. **Homebrew** — the Homebrew formula in [caseyWebb/homebrew-tap](https://github.com/caseyWebb/homebrew-tap) is automatically updated
 
-Steps 3–8 run in a single workflow. If any step fails, the release has not been published, so fixing and re-pushing to main will trigger a clean retry.
+Builds complete before any release is created, so the immutable release constraint (no asset uploads after publish) is avoided — the release is created with all assets already attached.
 
 ## Version Bumps
 
