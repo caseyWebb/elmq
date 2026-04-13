@@ -7,7 +7,7 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src/ src/
 RUN cargo build --release --locked
 
-FROM --platform=linux/amd64 node:22-slim
+FROM --platform=linux/amd64 node:24-slim
 
 RUN apt-get update && apt-get install -y git jq && rm -rf /var/lib/apt/lists/*
 
