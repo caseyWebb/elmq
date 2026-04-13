@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.3 (2026-04-13)
+
+## What's Changed
+* fix: remove orphaned elm-spa-example submodule gitlink by @caseyWebb in https://github.com/caseyWebb/elmq/pull/68
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.7.2...v0.7.3
+
 ## 0.7.2 (2026-04-13)
 
 ## What's Changed
