@@ -286,3 +286,39 @@ fn expose_single_item_output_unchanged() {
         "single-item output should be bare, got: {stdout:?}"
     );
 }
+
+const BROKEN: &str = "module Broken exposing (bar)\n\nbar =\n    let\n        x = 1\n";
+
+#[test]
+fn expose_rejects_input_with_parse_errors() {
+    let f = with_temp_elm(BROKEN);
+    let path = f.path().to_str().unwrap();
+    let before = std::fs::read(f.path()).unwrap();
+
+    let output = elmq().args(["expose", path, "bar"]).output().unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("refusing to edit") && stderr.contains(path),
+        "stderr: {stderr}"
+    );
+    assert_eq!(std::fs::read(f.path()).unwrap(), before);
+}
+
+#[test]
+fn unexpose_rejects_input_with_parse_errors() {
+    let f = with_temp_elm(BROKEN);
+    let path = f.path().to_str().unwrap();
+    let before = std::fs::read(f.path()).unwrap();
+
+    let output = elmq().args(["unexpose", path, "bar"]).output().unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("refusing to edit") && stderr.contains(path),
+        "stderr: {stderr}"
+    );
+    assert_eq!(std::fs::read(f.path()).unwrap(), before);
+}

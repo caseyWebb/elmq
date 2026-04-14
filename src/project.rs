@@ -228,10 +228,11 @@ pub fn execute_mv(old_path: &Path, resolved_new: &Path, dry_run: bool) -> Result
             }
             let source = std::fs::read_to_string(elm_file)
                 .with_context(|| format!("could not read {}", elm_file.display()))?;
+            crate::parser::ensure_clean_parse(&source, elm_file)?;
             let new_source = writer::rename_module_references(&source, &old_module, &new_module);
             if new_source != source {
                 if !dry_run {
-                    writer::atomic_write(elm_file, &new_source)?;
+                    writer::validated_write(elm_file, &new_source, "mv")?;
                 }
                 updated_files.push(display_path(
                     elm_file.strip_prefix(&project.root).unwrap_or(elm_file),
@@ -243,6 +244,7 @@ pub fn execute_mv(old_path: &Path, resolved_new: &Path, dry_run: bool) -> Result
     // Read old file, update module declaration, write to new path.
     let old_source = std::fs::read_to_string(old_path)
         .with_context(|| format!("could not read {}", old_path.display()))?;
+    crate::parser::ensure_clean_parse(&old_source, old_path)?;
     let mut new_source = if old_module != new_module {
         writer::rename_module_declaration(&old_source, &new_module)?
     } else {
@@ -259,7 +261,7 @@ pub fn execute_mv(old_path: &Path, resolved_new: &Path, dry_run: bool) -> Result
                 .with_context(|| format!("could not create directory: {}", parent.display()))?;
         }
 
-        writer::atomic_write(resolved_new, &new_source)?;
+        writer::validated_write(resolved_new, &new_source, "mv")?;
         std::fs::remove_file(old_path)
             .with_context(|| format!("could not remove old file: {}", old_path.display()))?;
 
@@ -327,8 +329,7 @@ pub fn execute_rename(
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("could not read {}", file.display()))?;
 
-    let tree = crate::parser::parse(&source)
-        .with_context(|| format!("parse error in {}", file.display()))?;
+    let tree = crate::parser::ensure_clean_parse(&source, file)?;
     let summary = crate::parser::extract_summary(&tree, &source);
 
     // Check that old_name exists as a declaration or variant.
@@ -399,10 +400,7 @@ pub fn execute_rename(
             let file_source = std::fs::read_to_string(elm_file)
                 .with_context(|| format!("could not read {}", elm_file.display()))?;
 
-            let file_tree = match crate::parser::parse(&file_source) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
+            let file_tree = crate::parser::ensure_clean_parse(&file_source, elm_file)?;
 
             let root = file_tree.root_node();
             let import_info = crate::refs::parse_imports(&root, &file_source, &target_module);
@@ -426,7 +424,7 @@ pub fn execute_rename(
 
             if updated != file_source {
                 if !dry_run {
-                    writer::atomic_write(elm_file, &updated)?;
+                    writer::validated_write(elm_file, &updated, "rename")?;
                 }
                 updated_files.push(display_path(
                     elm_file.strip_prefix(&project.root).unwrap_or(elm_file),
@@ -437,7 +435,7 @@ pub fn execute_rename(
 
     // Write the defining file last.
     if new_source != source && !dry_run {
-        writer::atomic_write(file, &new_source)?;
+        writer::validated_write(file, &new_source, "rename")?;
     }
 
     Ok(RenameResult {

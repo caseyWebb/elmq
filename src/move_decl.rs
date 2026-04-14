@@ -39,8 +39,7 @@ pub fn execute_move_declaration(
     // Parse source file.
     let source_text = std::fs::read_to_string(source_file)
         .with_context(|| format!("could not read {}", source_file.display()))?;
-    let source_tree = parser::parse(&source_text)
-        .with_context(|| format!("parse error in {}", source_file.display()))?;
+    let source_tree = parser::ensure_clean_parse(&source_text, source_file)?;
     let source_summary = parser::extract_summary(&source_tree, &source_text);
     let source_root = source_tree.root_node();
     let source_ctx = ImportContext::from_tree(&source_root, &source_text);
@@ -78,8 +77,7 @@ pub fn execute_move_declaration(
     let (target_text, target_tree, target_module) = if target_exists {
         let text = std::fs::read_to_string(target_file)
             .with_context(|| format!("could not read {}", target_file.display()))?;
-        let tree = parser::parse(&text)
-            .with_context(|| format!("parse error in {}", target_file.display()))?;
+        let tree = parser::ensure_clean_parse(&text, target_file)?;
         let module = project.module_name(target_file)?;
         (text, Some(tree), module)
     } else {
@@ -304,10 +302,7 @@ pub fn execute_move_declaration(
 
         let file_source = std::fs::read_to_string(elm_file)
             .with_context(|| format!("could not read {}", elm_file.display()))?;
-        let file_tree = match parser::parse(&file_source) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
+        let file_tree = parser::ensure_clean_parse(&file_source, elm_file)?;
         let file_root = file_tree.root_node();
         let file_ctx = ImportContext::from_tree(&file_root, &file_source);
 
@@ -435,10 +430,10 @@ pub fn execute_move_declaration(
 
     // Write everything atomically.
     if !dry_run {
-        writer::atomic_write(source_file, &new_source_text)?;
-        writer::atomic_write(target_file, &new_target_text)?;
+        writer::validated_write(source_file, &new_source_text, "move-decl")?;
+        writer::validated_write(target_file, &new_target_text, "move-decl")?;
         for (path, content) in &file_updates {
-            writer::atomic_write(path, content)?;
+            writer::validated_write(path, content, "move-decl")?;
         }
     }
 
@@ -803,17 +798,71 @@ fn build_updated_source(
         result = writer::remove_declaration(&result, &temp_summary, &decl.name)?;
     }
 
-    // Update exposing list: remove moved names.
-    for name in decls_to_remove {
-        let tree = parser::parse(&result)?;
-        let summary = parser::extract_summary(&tree, &result);
-        // Only try to unexpose if it's currently exposed.
-        if is_declaration_exposed(&tree, &result, name) {
-            result = writer::unexpose(&result, &summary, name).unwrap_or(result);
+    // Update exposing list: remove moved names. If unexposing the moved
+    // names would leave the module with an empty `exposing ()` — which
+    // is not valid Elm — fall back to `exposing (..)` so the remaining
+    // declarations (including any auto-included helpers) stay visible.
+    let module_decl = writer::find_module_declaration(&result)?;
+    let exposing_content = writer::extract_exposing_content(&module_decl)?;
+    let currently_all = exposing_content.trim() == "..";
+    if !currently_all {
+        let current_items = parse_exposing_items_str(&exposing_content);
+        let remaining: Vec<&String> = current_items
+            .iter()
+            .filter(|item| {
+                let base = item.split('(').next().unwrap_or(item).trim();
+                !decls_to_remove.contains(base)
+            })
+            .collect();
+        if remaining.is_empty() {
+            let new_line = writer::replace_exposing_public(&module_decl, "(..)")?;
+            result = result.replacen(&module_decl, &new_line, 1);
+        } else {
+            for name in decls_to_remove {
+                let tree = parser::parse(&result)?;
+                let summary = parser::extract_summary(&tree, &result);
+                if is_declaration_exposed(&tree, &result, name) {
+                    result = writer::unexpose(&result, &summary, name).unwrap_or(result);
+                }
+            }
         }
     }
 
     Ok(result)
+}
+
+fn parse_exposing_items_str(content: &str) -> Vec<String> {
+    if content.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut items = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    for ch in content.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    items.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        items.push(trimmed);
+    }
+    items
 }
 
 /// Build a new target file from scratch.

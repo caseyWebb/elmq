@@ -2712,3 +2712,123 @@ go =
         "unrelated constructor must not be reported: {refs}"
     );
 }
+
+// ============================================================================
+// write-safety rejection tests
+// ============================================================================
+
+#[test]
+fn variant_add_rejects_broken_type_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Types.elm",
+        "module Types exposing (Msg(..))\n\ntype Msg\n    = Increment\n    | Decrement\n\nfoo =\n    let\n        x = 1\n",
+    );
+    let before = fs::read(root.join("src/Types.elm")).unwrap();
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["variant", "add", "src/Types.elm", "--type", "Msg", "Reset"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to edit"), "stderr: {stderr}");
+    assert_eq!(fs::read(root.join("src/Types.elm")).unwrap(), before);
+}
+
+#[test]
+fn variant_rm_rejects_broken_type_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Types.elm",
+        "module Types exposing (Msg(..))\n\ntype Msg\n    = Increment\n    | Decrement\n\nfoo =\n    let\n        x = 1\n",
+    );
+    let before = fs::read(root.join("src/Types.elm")).unwrap();
+
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "variant",
+            "rm",
+            "src/Types.elm",
+            "--type",
+            "Msg",
+            "Increment",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to edit"), "stderr: {stderr}");
+    assert_eq!(fs::read(root.join("src/Types.elm")).unwrap(), before);
+}
+
+#[test]
+fn variant_add_rejects_malformed_fill_body() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Types.elm",
+        "module Types exposing (Msg(..))\n\ntype Msg\n    = Increment\n    | Decrement\n",
+    );
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (update)
+
+import Types exposing (Msg(..))
+
+update : Msg -> Int -> Int
+update msg count =
+    case msg of
+        Increment ->
+            count + 1
+
+        Decrement ->
+            count - 1
+",
+    );
+    let types_before = fs::read(root.join("src/Types.elm")).unwrap();
+    let main_before = fs::read(root.join("src/Main.elm")).unwrap();
+
+    // Fill body that does not parse as an Elm expression.
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "variant",
+            "add",
+            "src/Types.elm",
+            "--type",
+            "Msg",
+            "Reset",
+            "--fill",
+            "update=model |",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("rejected 'variant add' write"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("Main.elm"), "stderr: {stderr}");
+    // Main.elm must be unchanged.
+    assert_eq!(fs::read(root.join("src/Main.elm")).unwrap(), main_before);
+    // Types.elm may have been written before Main.elm was validated;
+    // document the partial-write semantics by not asserting on it.
+    let _ = types_before;
+}

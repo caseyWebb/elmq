@@ -328,3 +328,30 @@ fn mv_cleans_up_empty_directories() {
     assert!(!root.join("src/Deep/Nested").exists());
     assert!(!root.join("src/Deep").exists());
 }
+
+#[test]
+fn mv_rejects_broken_source_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+
+    write_elm(
+        root,
+        "src/Broken.elm",
+        "module Broken exposing (bar)\n\nbar =\n    let\n        x = 1\n",
+    );
+    let before = fs::read(root.join("src/Broken.elm")).unwrap();
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["mv", "src/Broken.elm", "src/Other.elm"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to edit"), "stderr: {stderr}");
+    assert!(root.join("src/Broken.elm").exists());
+    assert!(!root.join("src/Other.elm").exists());
+    assert_eq!(fs::read(root.join("src/Broken.elm")).unwrap(), before);
+}

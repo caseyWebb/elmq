@@ -59,6 +59,8 @@ $ elmq get src/Api.elm fetchData
 
 **Trust your edits.** If `elmq patch`/`set`/`variant add`/`Edit` exited `0`, it applied exactly what you asked for. **Never re-read a file or declaration after a successful edit** — each re-read is a wasted turn. Only re-read when the compiler reports an error you need to diagnose.
 
+**Write commands refuse to touch a broken file.** Every write subcommand parses the target with tree-sitter before doing anything. If tree-sitter finds an ERROR/MISSING node, elmq exits non-zero with `refusing to edit <path>: file has pre-existing parse errors at <line>:<col>` and writes nothing. Fix the file in an editor first, then retry. Write commands also re-parse their own output before committing it to disk; if an operation would produce syntactically invalid Elm (from a malformed `set`/`patch` body, a bad `variant add --fill` branch, or an elmq bug), you get `rejected '<op>' write to <path>: output would not parse at <line>:<col>` and the file on disk is unchanged. For multi-file commands (`mv`, `rename`, `move-decl`, `variant add`/`rm`), earlier files in the batch may already be written when a later file fails — the error names the failing file; re-run after repair.
+
 ### Command reference
 
 **Project-wide** — these handle the entire dependency graph atomically. **Never manually patch a type definition to add/remove a variant** — use `variant add`/`variant rm`, which propagate through every case expression in the project:

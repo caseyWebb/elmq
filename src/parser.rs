@@ -1,5 +1,6 @@
 use crate::{Declaration, DeclarationKind, FileSummary};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use std::path::Path;
 use tree_sitter::{Node, Parser, Tree};
 
 pub fn parse(source: &str) -> Result<Tree> {
@@ -10,6 +11,67 @@ pub fn parse(source: &str) -> Result<Tree> {
     parser
         .parse(source, None)
         .context("failed to parse Elm source")
+}
+
+/// Locate the first ERROR or MISSING node in a tree and return its
+/// 1-indexed `(line, col)` position. Returns `None` if the tree is clean.
+pub fn first_error_location(tree: &Tree, source: &str) -> Option<(usize, usize)> {
+    fn walk<'a>(node: Node<'a>) -> Option<Node<'a>> {
+        if node.is_error() || node.is_missing() {
+            return Some(node);
+        }
+        if !node.has_error() {
+            return None;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(found) = walk(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    let node = walk(tree.root_node())?;
+    let start = node.start_byte();
+    Some(byte_offset_to_line_col(source, start))
+}
+
+fn byte_offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
+    let clamped = offset.min(source.len());
+    let mut line = 1;
+    let mut col = 1;
+    for (i, ch) in source.char_indices() {
+        if i >= clamped {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+/// Parse `source` and fail if tree-sitter produced any ERROR or MISSING
+/// nodes. Intended for write-path preconditions — commands that mutate
+/// Elm sources MUST call this (or an equivalent helper) before operating
+/// on the file, so we never splice edits into a damaged CST.
+pub fn ensure_clean_parse(source: &str, file: &Path) -> Result<Tree> {
+    let tree = parse(source)?;
+    if tree.root_node().has_error() {
+        let where_ = match first_error_location(&tree, source) {
+            Some((line, col)) => format!(" at {line}:{col}"),
+            None => String::new(),
+        };
+        bail!(
+            "refusing to edit {}: file has pre-existing parse errors{where_}",
+            file.display()
+        );
+    }
+    Ok(tree)
 }
 
 pub fn extract_summary(tree: &Tree, source: &str) -> FileSummary {
@@ -398,5 +460,64 @@ port sendMessage : String -> Cmd msg
     #[test]
     fn test_extract_declaration_name_unparseable() {
         assert_eq!(extract_declaration_name("not valid elm at all {{{"), None);
+    }
+
+    #[test]
+    fn test_first_error_location_clean_tree() {
+        let tree = parse(SAMPLE_ELM).unwrap();
+        assert_eq!(first_error_location(&tree, SAMPLE_ELM), None);
+    }
+
+    #[test]
+    fn test_first_error_location_unclosed_let() {
+        let source = "module Main exposing (..)\n\nfoo =\n    let\n        x = 1\n";
+        let tree = parse(source).unwrap();
+        let loc = first_error_location(&tree, source);
+        assert!(loc.is_some(), "expected an error location for unclosed let");
+        let (line, _col) = loc.unwrap();
+        assert!(
+            (3..=6).contains(&line),
+            "error line {line} should fall inside the let block"
+        );
+    }
+
+    #[test]
+    fn test_first_error_location_malformed_annotation() {
+        let source = "module Main exposing (..)\n\nfoo : Int ->\nfoo = 1\n";
+        let tree = parse(source).unwrap();
+        let loc = first_error_location(&tree, source);
+        assert!(
+            loc.is_some(),
+            "expected an error location for dangling type arrow"
+        );
+    }
+
+    #[test]
+    fn test_first_error_location_picks_first_by_offset() {
+        let source = "module Main exposing (..)\n\nfoo =\n    let\n\nbar =\n    case\n";
+        let tree = parse(source).unwrap();
+        let loc = first_error_location(&tree, source);
+        assert!(loc.is_some());
+        let (line, _) = loc.unwrap();
+        assert!(
+            line <= 5,
+            "first error should be reported before the second broken construct, got line {line}"
+        );
+    }
+
+    #[test]
+    fn test_ensure_clean_parse_accepts_valid_source() {
+        let path = std::path::Path::new("Sample.elm");
+        assert!(ensure_clean_parse(SAMPLE_ELM, path).is_ok());
+    }
+
+    #[test]
+    fn test_ensure_clean_parse_rejects_broken_source() {
+        let path = std::path::Path::new("Broken.elm");
+        let source = "module Main exposing (..)\n\nfoo =\n    let\n        x = 1\n";
+        let err = ensure_clean_parse(source, path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Broken.elm"), "message: {msg}");
+        assert!(msg.contains("pre-existing parse errors"), "message: {msg}");
     }
 }

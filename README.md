@@ -40,6 +40,10 @@ cargo install --path .
 
 ## Usage
 
+### Write-safety precondition
+
+Every elmq command that mutates a `.elm` file — `set`, `patch`, `rm`, `import`, `expose`/`unexpose`, `mv`, `rename`, `move-decl`, `variant add`/`rm` — refuses to operate on a file that has pre-existing tree-sitter parse errors, and refuses to produce an output buffer that would not parse. If either check fires, elmq exits non-zero with a `refusing to edit …` or `rejected '<op>' write to …` message naming the file and the first error location, and the file on disk is left unchanged. Fix the file by hand (or with your editor) and retry. Read commands (`list`, `get`, `grep`, `refs`, `variant cases`) keep their existing tolerant behavior — they print a warning and continue so you can still inspect broken files.
+
 ### File summary
 
 ```sh

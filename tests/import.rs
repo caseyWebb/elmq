@@ -289,3 +289,45 @@ fn import_single_clause_output_unchanged() {
         "single-arg output should not contain header markers, got: {stdout:?}"
     );
 }
+
+const BROKEN: &str = "module Broken exposing (bar)\n\nbar =\n    let\n        x = 1\n";
+
+#[test]
+fn import_add_rejects_input_with_parse_errors() {
+    let f = with_temp_elm(BROKEN);
+    let path = f.path().to_str().unwrap();
+    let before = std::fs::read(f.path()).unwrap();
+
+    let output = elmq()
+        .args(["import", "add", path, "Html"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("refusing to edit") && stderr.contains(path),
+        "stderr: {stderr}"
+    );
+    assert_eq!(std::fs::read(f.path()).unwrap(), before);
+}
+
+#[test]
+fn import_remove_rejects_input_with_parse_errors() {
+    let f = with_temp_elm(BROKEN);
+    let path = f.path().to_str().unwrap();
+    let before = std::fs::read(f.path()).unwrap();
+
+    let output = elmq()
+        .args(["import", "remove", path, "Html"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("refusing to edit") && stderr.contains(path),
+        "stderr: {stderr}"
+    );
+    assert_eq!(std::fs::read(f.path()).unwrap(), before);
+}

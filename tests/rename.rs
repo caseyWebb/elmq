@@ -354,3 +354,73 @@ fn rename_type_project_wide() {
     let main = fs::read_to_string(root.join("src/Main.elm")).unwrap();
     assert!(main.contains("Lib.Utils.AppModel"));
 }
+
+#[test]
+fn rename_rejects_broken_source_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Broken.elm",
+        "module Broken exposing (bar)\n\nbar =\n    let\n        x = 1\n",
+    );
+    let before = fs::read(root.join("src/Broken.elm")).unwrap();
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["rename", "src/Broken.elm", "bar", "baz"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to edit"), "stderr: {stderr}");
+    assert_eq!(fs::read(root.join("src/Broken.elm")).unwrap(), before);
+}
+
+#[test]
+fn rename_rejects_when_downstream_file_is_broken() {
+    // Clean defining file, but a downstream file that imports the renamed
+    // declaration has a pre-existing parse error. Input-side validation
+    // must catch this before any file is mutated on disk.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Lib.elm",
+        "module Lib exposing (helper)\n\nhelper : String -> String\nhelper s = s\n",
+    );
+    write_elm(
+        root,
+        "src/Downstream.elm",
+        "module Downstream exposing (..)\n\nimport Lib exposing (helper)\n\nuse =\n    let\n        x = helper \"hi\"\n",
+    );
+    let lib_before = fs::read(root.join("src/Lib.elm")).unwrap();
+    let downstream_before = fs::read(root.join("src/Downstream.elm")).unwrap();
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["rename", "src/Lib.elm", "helper", "helper2"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("refusing to edit") && stderr.contains("Downstream.elm"),
+        "stderr: {stderr}"
+    );
+    // The defining file may or may not have been rewritten before the
+    // downstream read failed — partial-write semantics allow both. But
+    // the broken downstream file MUST be unchanged.
+    assert_eq!(
+        fs::read(root.join("src/Downstream.elm")).unwrap(),
+        downstream_before
+    );
+    // The defining file should not have been written either, because
+    // the rename implementation scans downstream files before writing
+    // the defining file last.
+    assert_eq!(fs::read(root.join("src/Lib.elm")).unwrap(), lib_before);
+}
