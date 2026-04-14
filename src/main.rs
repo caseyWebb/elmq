@@ -3,7 +3,10 @@ mod framing;
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, FromArgMatches};
-use cli::{Cli, Command, Format, GrepFormat, ImportCommand, VariantCommand};
+use cli::{
+    AddCommand, Cli, Command, Format, GrepFormat, RenameCommand, RmCommand, SetCommand,
+    VariantReadCommand,
+};
 use elmq::parser;
 use elmq::project;
 use elmq::refs;
@@ -161,22 +164,74 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
             }
         }
 
-        Command::Set { file, name } => {
-            let (source, summary) = load_and_parse_for_write(&file)?;
-            let new_source = read_stdin()?;
-
-            let decl_name = if let Some(name) = name {
-                name
-            } else {
-                parser::extract_declaration_name(&new_source).context(
-                    "could not parse declaration name from stdin (use --name to specify)",
-                )?
-            };
-
-            let result = writer::upsert_declaration(&source, &summary, &decl_name, &new_source);
-            writer::validated_write(&file, &result, "set")?;
-            Ok(0)
-        }
+        Command::Set { command } => match command {
+            SetCommand::Decl(args) => {
+                let (source, summary) = load_and_parse_for_write(&args.file)?;
+                let new_source = match args.content {
+                    Some(c) => c,
+                    None => read_stdin()?,
+                };
+                let parsed_name: Option<String> = parser::extract_declaration_name(&new_source);
+                let decl_name: String = match (args.name.as_deref(), parsed_name.as_deref()) {
+                    (Some(flag), Some(parsed)) if flag != parsed => {
+                        bail!(
+                            "--name '{flag}' does not match parsed name '{parsed}' in content; use `rename decl` to rename"
+                        );
+                    }
+                    (Some(name), _) => name.to_string(),
+                    (None, Some(p)) => p.to_string(),
+                    (None, None) => bail!(
+                        "could not parse declaration name from content (pass --name or ensure content begins with a declaration)"
+                    ),
+                };
+                let result = writer::upsert_declaration(&source, &summary, &decl_name, &new_source);
+                writer::validated_write(&args.file, &result, "set decl")?;
+                println!("ok");
+                Ok(0)
+            }
+            SetCommand::Let(args) => {
+                use writer::let_binding::{self, BindingSpec};
+                let (source, summary) = load_and_parse_for_write(&args.file)?;
+                let body = match args.body {
+                    Some(b) => b,
+                    None => read_stdin()?,
+                };
+                let spec = BindingSpec {
+                    name: args.name,
+                    body,
+                    type_annotation: args.type_annotation,
+                    params: args
+                        .params
+                        .map(|s| s.split_whitespace().map(|p| p.to_string()).collect()),
+                    no_type: args.no_type,
+                    after: args.after,
+                    before: args.before,
+                    line: args.line,
+                };
+                let result = let_binding::upsert_let_binding(&source, &summary, &args.decl, &spec)?;
+                writer::validated_write(&args.file, &result, "set let")?;
+                println!("ok");
+                Ok(0)
+            }
+            SetCommand::Case(args) => {
+                use writer::case_branch::{self, CaseSpec};
+                let (source, summary) = load_and_parse_for_write(&args.file)?;
+                let body = match args.body {
+                    Some(b) => b,
+                    None => read_stdin()?,
+                };
+                let spec = CaseSpec {
+                    on: args.on,
+                    pattern: args.pattern,
+                    body,
+                    line: args.line,
+                };
+                let result = case_branch::upsert_case_branch(&source, &summary, &args.decl, &spec)?;
+                writer::validated_write(&args.file, &result, "set case")?;
+                println!("ok");
+                Ok(0)
+            }
+        },
 
         Command::Patch {
             file,
@@ -187,14 +242,113 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
             let (source, summary) = load_and_parse_for_write(&file)?;
             let result = writer::patch_declaration(&source, &summary, &name, &old, &new)?;
             writer::validated_write(&file, &result, "patch")?;
+            println!("ok");
             Ok(0)
         }
 
-        Command::Rm { file, names } => run_rm(file, names),
+        Command::Rm { command } => match command {
+            RmCommand::Decl(args) => run_rm(args.file, args.names),
+            RmCommand::Let(args) => {
+                use writer::let_binding;
+                let (source, summary) = load_and_parse_for_write(&args.file)?;
+                let result = if args.names.len() == 1 {
+                    let_binding::remove_let_binding(
+                        &source,
+                        &summary,
+                        &args.decl,
+                        &args.names[0],
+                        args.line,
+                    )?
+                } else {
+                    let_binding::remove_let_bindings_batch(
+                        &source,
+                        &summary,
+                        &args.decl,
+                        &args.names,
+                    )?
+                };
+                writer::validated_write(&args.file, &result, "rm let")?;
+                println!("ok");
+                Ok(0)
+            }
+            RmCommand::Case(args) => {
+                use writer::case_branch;
+                let (source, summary) = load_and_parse_for_write(&args.file)?;
+                let result = if args.pattern.len() == 1 {
+                    case_branch::remove_case_branch(
+                        &source,
+                        &summary,
+                        &args.decl,
+                        args.on.as_deref(),
+                        &args.pattern[0],
+                        args.line,
+                    )?
+                } else {
+                    case_branch::remove_case_branches_batch(
+                        &source,
+                        &summary,
+                        &args.decl,
+                        args.on.as_deref(),
+                        &args.pattern,
+                        args.line,
+                    )?
+                };
+                writer::validated_write(&args.file, &result, "rm case")?;
+                println!("ok");
+                Ok(0)
+            }
+            RmCommand::Arg(args) => {
+                use writer::function_arg::{self, ArgTarget};
+                let (source, summary) = load_and_parse_for_write(&args.file)?;
+                let targets: Vec<ArgTarget> = if !args.at.is_empty() {
+                    args.at.into_iter().map(ArgTarget::Position).collect()
+                } else if !args.name.is_empty() {
+                    args.name.into_iter().map(ArgTarget::Name).collect()
+                } else {
+                    bail!("rm arg requires at least one --at or --name");
+                };
+                let result = function_arg::remove_function_args_batch(
+                    &source, &summary, &args.decl, &targets,
+                )?;
+                writer::validated_write(&args.file, &result, "rm arg")?;
+                println!("ok");
+                Ok(0)
+            }
+            RmCommand::Variant(args) => run_variant_rm(
+                args.file,
+                args.type_name,
+                args.constructor,
+                args.format,
+                args.dry_run,
+            ),
+            RmCommand::Import(args) => run_import_remove(args.file, args.module_names),
+        },
 
-        Command::Import { command } => match command {
-            ImportCommand::Add { file, imports } => run_import_add(file, imports),
-            ImportCommand::Remove { file, module_names } => run_import_remove(file, module_names),
+        Command::Add { command } => match command {
+            AddCommand::Arg(args) => {
+                use writer::function_arg;
+                let (source, summary) = load_and_parse_for_write(&args.file)?;
+                let result = function_arg::add_function_arg(
+                    &source,
+                    &summary,
+                    &args.decl,
+                    args.at,
+                    &args.name,
+                    args.type_annotation.as_deref(),
+                )?;
+                writer::validated_write(&args.file, &result, "add arg")?;
+                println!("ok");
+                Ok(0)
+            }
+            AddCommand::Variant(args) => run_variant_add(
+                args.file,
+                args.type_name,
+                args.definition,
+                args.format,
+                args.dry_run,
+                args.fill,
+            ),
+            AddCommand::Import(args) => run_import_add(args.file, args.imports),
         },
 
         Command::Expose { file, items } => run_expose(file, items),
@@ -253,41 +407,63 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
             format,
         } => run_refs(file, names, format),
 
-        Command::Rename {
-            file,
-            old_name,
-            new_name,
-            format,
-            dry_run,
-        } => {
-            let canonical = file
-                .canonicalize()
-                .with_context(|| format!("file not found: {}", file.display()))?;
+        Command::Rename { command } => match command {
+            RenameCommand::Decl(args) => {
+                let canonical = args
+                    .file
+                    .canonicalize()
+                    .with_context(|| format!("file not found: {}", args.file.display()))?;
 
-            let result = project::execute_rename(&canonical, &old_name, &new_name, dry_run)?;
+                let result = project::execute_rename(
+                    &canonical,
+                    &args.old_name,
+                    &args.new_name,
+                    args.dry_run,
+                )?;
 
-            match format {
-                Format::Compact => {
-                    let prefix = if dry_run { "(dry run) " } else { "" };
-                    println!("{prefix}renamed {} -> {}", result.old_name, result.new_name);
-                    for f in &result.updated_files {
-                        println!("{prefix}updated {f}");
+                match args.format {
+                    Format::Compact => {
+                        let prefix = if args.dry_run { "(dry run) " } else { "" };
+                        println!("{prefix}renamed {} -> {}", result.old_name, result.new_name);
+                        for f in &result.updated_files {
+                            println!("{prefix}updated {f}");
+                        }
+                    }
+                    Format::Json => {
+                        let json = serde_json::json!({
+                            "dry_run": args.dry_run,
+                            "renamed": {
+                                "from": result.old_name,
+                                "to": result.new_name,
+                            },
+                            "updated": result.updated_files,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json)?);
                     }
                 }
-                Format::Json => {
-                    let json = serde_json::json!({
-                        "dry_run": dry_run,
-                        "renamed": {
-                            "from": result.old_name,
-                            "to": result.new_name,
-                        },
-                        "updated": result.updated_files,
-                    });
-                    println!("{}", serde_json::to_string_pretty(&json)?);
-                }
+                Ok(0)
             }
-            Ok(0)
-        }
+            RenameCommand::Let(args) => {
+                use writer::let_binding;
+                let (source, summary) = load_and_parse_for_write(&args.file)?;
+                let result = let_binding::rename_let_binding(
+                    &source, &summary, &args.decl, &args.from, &args.to, args.line,
+                )?;
+                writer::validated_write(&args.file, &result, "rename let")?;
+                println!("ok");
+                Ok(0)
+            }
+            RenameCommand::Arg(args) => {
+                use writer::function_arg;
+                let (source, summary) = load_and_parse_for_write(&args.file)?;
+                let result = function_arg::rename_function_arg(
+                    &source, &summary, &args.decl, &args.from, &args.to,
+                )?;
+                writer::validated_write(&args.file, &result, "rename arg")?;
+                println!("ok");
+                Ok(0)
+            }
+        },
 
         Command::MoveDecl {
             file,
@@ -361,69 +537,7 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
         }
 
         Command::Variant { command } => match command {
-            VariantCommand::Add {
-                file,
-                type_name,
-                definition,
-                format,
-                dry_run,
-                fill,
-            } => {
-                let canonical = file
-                    .canonicalize()
-                    .with_context(|| format!("file not found: {}", file.display()))?;
-
-                // Parse --fill values: split each `KEY=BRANCH` on the first `=`. Missing
-                // `=` is a user error (surface as a clap-style error with exit code 2).
-                let mut fills: std::collections::HashMap<String, String> =
-                    std::collections::HashMap::new();
-                for f in &fill {
-                    let Some(eq) = f.find('=') else {
-                        anyhow::bail!(
-                            "invalid --fill value '{}': expected KEY=BRANCH (missing '=')",
-                            f
-                        );
-                    };
-                    let (key, rest) = f.split_at(eq);
-                    let body = &rest[1..]; // skip the '='
-                    fills.insert(key.to_string(), body.to_string());
-                }
-
-                let result = elmq::variant::execute_add_variant(
-                    &canonical,
-                    &type_name,
-                    &definition,
-                    dry_run,
-                    fills,
-                )?;
-
-                match format {
-                    Format::Compact => {
-                        let prefix = if dry_run { "(dry run) " } else { "" };
-                        println!(
-                            "{prefix}added {} to {} in {}",
-                            result.variant_name, result.type_name, result.type_file
-                        );
-                        for edit in &result.edits {
-                            println!(
-                                "  {prefix}{}:{}  {}  — inserted branch",
-                                edit.file, edit.line, edit.function
-                            );
-                        }
-                        for skip in &result.skipped {
-                            println!(
-                                "  {}:{}  {}  — skipped ({})",
-                                skip.file, skip.line, skip.function, skip.reason
-                            );
-                        }
-                    }
-                    Format::Json => {
-                        println!("{}", serde_json::to_string_pretty(&result)?);
-                    }
-                }
-                Ok(0)
-            }
-            VariantCommand::Cases {
+            VariantReadCommand::Cases {
                 file,
                 type_name,
                 format,
@@ -444,53 +558,108 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
                 }
                 Ok(0)
             }
-            VariantCommand::Rm {
-                file,
-                type_name,
-                constructor,
-                format,
-                dry_run,
-            } => {
-                let canonical = file
-                    .canonicalize()
-                    .with_context(|| format!("file not found: {}", file.display()))?;
-
-                let result = elmq::variant::execute_rm_variant(
-                    &canonical,
-                    &type_name,
-                    &constructor,
-                    dry_run,
-                )?;
-
-                match format {
-                    Format::Compact => {
-                        let prefix = if dry_run { "(dry run) " } else { "" };
-                        println!(
-                            "{prefix}removed {} from {} in {}",
-                            result.variant_name, result.type_name, result.type_file
-                        );
-                        for edit in &result.edits {
-                            println!(
-                                "  {prefix}{}:{}  {}  — removed branch",
-                                edit.file, edit.line, edit.function
-                            );
-                        }
-                        for skip in &result.skipped {
-                            println!(
-                                "  {}:{}  {}  — skipped ({})",
-                                skip.file, skip.line, skip.function, skip.reason
-                            );
-                        }
-                        render_rm_advisory(&result.references_not_rewritten);
-                    }
-                    Format::Json => {
-                        println!("{}", serde_json::to_string_pretty(&result)?);
-                    }
-                }
-                Ok(0)
-            }
         },
     }
+}
+
+// ---------------- add variant / rm variant helpers ----------------
+
+fn run_variant_add(
+    file: PathBuf,
+    type_name: String,
+    definition: String,
+    format: Format,
+    dry_run: bool,
+    fill: Vec<String>,
+) -> Result<i32> {
+    let canonical = file
+        .canonicalize()
+        .with_context(|| format!("file not found: {}", file.display()))?;
+
+    let mut fills: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for f in &fill {
+        let Some(eq) = f.find('=') else {
+            anyhow::bail!(
+                "invalid --fill value '{}': expected KEY=BRANCH (missing '=')",
+                f
+            );
+        };
+        let (key, rest) = f.split_at(eq);
+        let body = &rest[1..];
+        fills.insert(key.to_string(), body.to_string());
+    }
+
+    let result =
+        elmq::variant::execute_add_variant(&canonical, &type_name, &definition, dry_run, fills)?;
+
+    match format {
+        Format::Compact => {
+            let prefix = if dry_run { "(dry run) " } else { "" };
+            println!(
+                "{prefix}added {} to {} in {}",
+                result.variant_name, result.type_name, result.type_file
+            );
+            for edit in &result.edits {
+                println!(
+                    "  {prefix}{}:{}  {}  — inserted branch",
+                    edit.file, edit.line, edit.function
+                );
+            }
+            for skip in &result.skipped {
+                println!(
+                    "  {}:{}  {}  — skipped ({})",
+                    skip.file, skip.line, skip.function, skip.reason
+                );
+            }
+        }
+        Format::Json => {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+    }
+    Ok(0)
+}
+
+fn run_variant_rm(
+    file: PathBuf,
+    type_name: String,
+    constructor: String,
+    format: Format,
+    dry_run: bool,
+) -> Result<i32> {
+    let canonical = file
+        .canonicalize()
+        .with_context(|| format!("file not found: {}", file.display()))?;
+
+    let result = elmq::variant::execute_rm_variant(&canonical, &type_name, &constructor, dry_run)?;
+
+    match format {
+        Format::Compact => {
+            let prefix = if dry_run { "(dry run) " } else { "" };
+            println!(
+                "{prefix}removed {} from {} in {}",
+                result.variant_name, result.type_name, result.type_file
+            );
+            for edit in &result.edits {
+                println!(
+                    "  {prefix}{}:{}  {}  — removed branch",
+                    edit.file, edit.line, edit.function
+                );
+            }
+            for skip in &result.skipped {
+                println!(
+                    "  {}:{}  {}  — skipped ({})",
+                    skip.file, skip.line, skip.function, skip.reason
+                );
+            }
+            // `rm variant`'s `references_not_rewritten` advisory block is the sole
+            // documented exception to the confirmation-only write-output rule.
+            render_rm_advisory(&result.references_not_rewritten);
+        }
+        Format::Json => {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+    }
+    Ok(0)
 }
 
 /// Render the `references not rewritten` advisory block under a `variant rm`

@@ -71,7 +71,7 @@ update msg count =
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "add", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["add", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -143,8 +143,8 @@ update msg count =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -204,7 +204,7 @@ update msg count =
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "add", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["add", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -284,7 +284,7 @@ label msg =
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "add", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["add", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -350,7 +350,7 @@ update msg count =
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "rm", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["rm", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -397,7 +397,7 @@ type Msg
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "rm", "src/Types.elm", "--type", "Msg", "Only"])
+        .args(["rm", "variant", "src/Types.elm", "--type", "Msg", "Only"])
         .output()
         .unwrap();
 
@@ -453,8 +453,8 @@ update msg count =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -518,8 +518,8 @@ update msg count =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -609,7 +609,7 @@ label msg =
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "rm", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["rm", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -667,7 +667,7 @@ label msg =
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "add", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["add", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -731,7 +731,7 @@ update msg count =
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "add", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["add", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -785,7 +785,7 @@ update msg count =
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "add", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["add", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -851,7 +851,7 @@ label color =
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "add", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["add", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -918,8 +918,8 @@ update msg count =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "rm",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -997,8 +997,8 @@ update msg count =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "rm",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1044,8 +1044,8 @@ type Msg
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1088,8 +1088,8 @@ type Msg
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "rm",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1485,8 +1485,8 @@ update msg count =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1554,8 +1554,8 @@ view msg =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1617,8 +1617,8 @@ view msg =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1667,8 +1667,8 @@ update msg =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1733,8 +1733,8 @@ update msg =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1788,8 +1788,8 @@ update msg model =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1835,8 +1835,8 @@ update msg =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -1895,8 +1895,8 @@ step msg model =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -2483,8 +2483,8 @@ start =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "rm",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -2545,8 +2545,8 @@ update msg n =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "rm",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -2593,8 +2593,8 @@ go =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "rm",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -2652,8 +2652,8 @@ unwrap m =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "rm",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -2731,7 +2731,7 @@ fn variant_add_rejects_broken_type_file() {
 
     let output = elmq()
         .current_dir(root)
-        .args(["variant", "add", "src/Types.elm", "--type", "Msg", "Reset"])
+        .args(["add", "variant", "src/Types.elm", "--type", "Msg", "Reset"])
         .output()
         .unwrap();
 
@@ -2756,8 +2756,8 @@ fn variant_rm_rejects_broken_type_file() {
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "rm",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",
@@ -2807,8 +2807,8 @@ update msg count =
     let output = elmq()
         .current_dir(root)
         .args([
-            "variant",
             "add",
+            "variant",
             "src/Types.elm",
             "--type",
             "Msg",

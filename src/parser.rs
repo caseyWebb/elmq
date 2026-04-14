@@ -74,6 +74,158 @@ pub fn ensure_clean_parse(source: &str, file: &Path) -> Result<Tree> {
     Ok(tree)
 }
 
+/// Verify a case-branch body expression parses cleanly.
+///
+/// Wraps the source as `_ -> <source>` inside a synthetic case expression
+/// inside a synthetic top-level function, parses, and checks for errors.
+/// Returns `Ok(())` on a clean parse; errors with coordinate translation
+/// otherwise.
+pub fn parse_case_branch_body(source: &str) -> Result<()> {
+    if source.trim().is_empty() {
+        bail!("case branch body source is empty");
+    }
+
+    // Wrap in a synthetic module, function, and case expression.
+    let wrapper = "module X exposing (..)\nf =\n    case () of\n        _ -> ";
+    let wrapped = format!("{}{}", wrapper, source);
+    let tree = parse(&wrapped)?;
+
+    if tree.root_node().has_error() {
+        let inner_tree = parse(source)?;
+        if let Some((line, col)) = first_error_location(&inner_tree, source) {
+            bail!("parse error in case branch body at {line}:{col}");
+        }
+        bail!("parse error in case branch body");
+    }
+
+    Ok(())
+}
+
+/// Information extracted from parsing a standalone let-binding source string.
+#[derive(Debug, Clone)]
+pub struct LetBindingInfo {
+    pub name: String,
+    pub params: Vec<String>,
+    pub type_annotation: Option<String>,
+    pub body_span: (usize, usize),
+}
+
+/// Parse a standalone let-binding source string (optional `<name> : <type>` signature
+/// followed by a `<name> <params?> = <body>` definition). Used by `set let` to
+/// validate `--body` content and by writer::let_binding to read an existing binding's
+/// signature and params before upserting.
+pub fn parse_let_binding(source: &str) -> Result<LetBindingInfo> {
+    if source.trim().is_empty() {
+        bail!("let-binding source is empty");
+    }
+
+    // Wrap the input as top-level declarations in a synthetic module.
+    let wrapper_prefix = "module X exposing (..)\n\n";
+    let needs_nl = !source.ends_with('\n');
+    let wrapped = format!(
+        "{wrapper_prefix}{source}{}",
+        if needs_nl { "\n" } else { "" }
+    );
+    let tree = parse(&wrapped)?;
+
+    if tree.root_node().has_error() {
+        let inner_tree = parse(source)?;
+        if let Some((line, col)) = first_error_location(&inner_tree, source) {
+            bail!("parse error in let-binding at {line}:{col}");
+        }
+        bail!("parse error in let-binding");
+    }
+
+    let root = tree.root_node();
+    let bytes = wrapped.as_bytes();
+    let offset = wrapper_prefix.len();
+
+    // Find the first type_annotation (optional) and value_declaration.
+    let mut ann_opt: Option<Node> = None;
+    let mut val_opt: Option<Node> = None;
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        match child.kind() {
+            "type_annotation" if val_opt.is_none() && ann_opt.is_none() => {
+                ann_opt = Some(child);
+            }
+            "value_declaration" if val_opt.is_none() => {
+                val_opt = Some(child);
+            }
+            _ => {}
+        }
+    }
+
+    let val = val_opt.ok_or_else(|| anyhow::anyhow!("no let-binding found in source"))?;
+
+    // Extract name and params from functionDeclarationLeft.
+    let fdl = val
+        .child_by_field_name("functionDeclarationLeft")
+        .ok_or_else(|| anyhow::anyhow!("no functionDeclarationLeft in binding"))?;
+    let mut fdl_cursor = fdl.walk();
+    let mut fdl_children: Vec<Node> = fdl.named_children(&mut fdl_cursor).collect();
+
+    let name = fdl_children
+        .first()
+        .and_then(|n| n.utf8_text(bytes).ok())
+        .unwrap_or("")
+        .to_string();
+
+    let params: Vec<String> = fdl_children
+        .drain(1..)
+        .filter_map(|n| n.utf8_text(bytes).ok().map(|s| s.to_string()))
+        .collect();
+
+    // Extract type annotation (the text after the `:` in the annotation line).
+    let type_annotation = ann_opt.and_then(|ann| {
+        // Prefer the `typeExpression` field if present; otherwise fall back
+        // to the raw slice after the `:` in the annotation source.
+        if let Some(te) = ann.child_by_field_name("typeExpression") {
+            te.utf8_text(bytes).ok().map(|s| s.trim().to_string())
+        } else {
+            let ann_text = ann.utf8_text(bytes).unwrap_or("");
+            ann_text
+                .split_once(':')
+                .map(|(_, rhs)| rhs.trim().to_string())
+        }
+    });
+
+    // Body span translated back to the input's coordinate system.
+    let body_node = val
+        .child_by_field_name("body")
+        .ok_or_else(|| anyhow::anyhow!("let-binding has no body"))?;
+    let body_span = (
+        body_node.start_byte().saturating_sub(offset),
+        body_node.end_byte().saturating_sub(offset),
+    );
+
+    Ok(LetBindingInfo {
+        name,
+        params,
+        type_annotation,
+        body_span,
+    })
+}
+
+/// Verify a type expression parses cleanly. Used by `add arg` to pre-flight
+/// validate `--type` before splicing into the signature's arrow chain.
+pub fn parse_arg_type(source: &str) -> Result<()> {
+    if source.trim().is_empty() {
+        bail!("type expression source is empty");
+    }
+    let wrapper = "module X exposing (..)\n\nf : ";
+    let wrapped = format!("{wrapper}{source}\nf = ()\n");
+    let tree = parse(&wrapped)?;
+    if tree.root_node().has_error() {
+        let inner_tree = parse(source)?;
+        if let Some((line, col)) = first_error_location(&inner_tree, source) {
+            bail!("parse error in type expression at {line}:{col}");
+        }
+        bail!("parse error in type expression");
+    }
+    Ok(())
+}
+
 pub fn extract_summary(tree: &Tree, source: &str) -> FileSummary {
     let root = tree.root_node();
     let module_line = extract_module_line(&root, source);

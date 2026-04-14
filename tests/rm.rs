@@ -34,7 +34,7 @@ fn rm_with_doc_comment_and_annotation() {
     let f = with_temp_elm(SAMPLE);
     let path = f.path().to_str().unwrap();
 
-    let output = elmq().args(["rm", path, "view"]).output().unwrap();
+    let output = elmq().args(["rm", "decl", path, "view"]).output().unwrap();
     assert!(output.status.success());
 
     let content = std::fs::read_to_string(f.path()).unwrap();
@@ -51,7 +51,10 @@ fn rm_without_doc_comment() {
     let f = with_temp_elm(SAMPLE);
     let path = f.path().to_str().unwrap();
 
-    let output = elmq().args(["rm", path, "helper"]).output().unwrap();
+    let output = elmq()
+        .args(["rm", "decl", path, "helper"])
+        .output()
+        .unwrap();
     assert!(output.status.success());
 
     let content = std::fs::read_to_string(f.path()).unwrap();
@@ -66,7 +69,10 @@ fn rm_whitespace_cleanup() {
     let f = with_temp_elm(SAMPLE);
     let path = f.path().to_str().unwrap();
 
-    let output = elmq().args(["rm", path, "helper"]).output().unwrap();
+    let output = elmq()
+        .args(["rm", "decl", path, "helper"])
+        .output()
+        .unwrap();
     assert!(output.status.success());
 
     let content = std::fs::read_to_string(f.path()).unwrap();
@@ -81,7 +87,10 @@ fn rm_not_found() {
     let f = with_temp_elm(SAMPLE);
     let path = f.path().to_str().unwrap();
 
-    let output = elmq().args(["rm", path, "nonExistent"]).output().unwrap();
+    let output = elmq()
+        .args(["rm", "decl", path, "nonExistent"])
+        .output()
+        .unwrap();
 
     assert_eq!(output.status.code(), Some(2));
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -95,7 +104,7 @@ fn rm_first_declaration() {
     let f = with_temp_elm(SAMPLE);
     let path = f.path().to_str().unwrap();
 
-    let output = elmq().args(["rm", path, "view"]).output().unwrap();
+    let output = elmq().args(["rm", "decl", path, "view"]).output().unwrap();
     assert!(output.status.success());
 
     let content = std::fs::read_to_string(f.path()).unwrap();
@@ -110,7 +119,10 @@ fn rm_last_declaration() {
     let f = with_temp_elm(SAMPLE);
     let path = f.path().to_str().unwrap();
 
-    let output = elmq().args(["rm", path, "another"]).output().unwrap();
+    let output = elmq()
+        .args(["rm", "decl", path, "another"])
+        .output()
+        .unwrap();
     assert!(output.status.success());
 
     let content = std::fs::read_to_string(f.path()).unwrap();
@@ -123,7 +135,7 @@ fn rm_only_declaration() {
     let f = with_temp_elm("module Main exposing (..)\n\n\nview = 1\n");
     let path = f.path().to_str().unwrap();
 
-    let output = elmq().args(["rm", path, "view"]).output().unwrap();
+    let output = elmq().args(["rm", "decl", path, "view"]).output().unwrap();
     assert!(output.status.success());
 
     let content = std::fs::read_to_string(f.path()).unwrap();
@@ -137,7 +149,7 @@ fn rm_multi_name_success() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["rm", path, "helper", "another"])
+        .args(["rm", "decl", path, "helper", "another"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -154,7 +166,7 @@ fn rm_multi_name_partial_failure() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["rm", path, "helper", "nonExistent", "another"])
+        .args(["rm", "decl", path, "helper", "nonExistent", "another"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -175,7 +187,7 @@ fn rm_multi_name_input_order() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["rm", path, "another", "view", "helper"])
+        .args(["rm", "decl", path, "another", "view", "helper"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -196,7 +208,7 @@ fn rm_multi_name_single_atomic_write() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["rm", path, "view", "helper", "another"])
+        .args(["rm", "decl", path, "view", "helper", "another"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -219,7 +231,7 @@ fn rm_single_name_output_unchanged() {
     let f = with_temp_elm(SAMPLE);
     let path = f.path().to_str().unwrap();
 
-    let output = elmq().args(["rm", path, "view"]).output().unwrap();
+    let output = elmq().args(["rm", "decl", path, "view"]).output().unwrap();
     assert!(output.status.success());
 
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -240,7 +252,7 @@ fn rm_rejects_input_with_parse_errors() {
     let path = f.path().to_str().unwrap();
     let before = std::fs::read(f.path()).unwrap();
 
-    let output = elmq().args(["rm", path, "bar"]).output().unwrap();
+    let output = elmq().args(["rm", "decl", path, "bar"]).output().unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();

@@ -2,3 +2,6 @@
 openspec/changes/
 benchmarks/results/
 benchmarks/.env
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+HYPOTHESIS.md

@@ -70,7 +70,13 @@ fn rename_single_file() {
 
     let output = elmq()
         .current_dir(root)
-        .args(["rename", "src/Foo.elm", "internalHelper", "formatName"])
+        .args([
+            "rename",
+            "decl",
+            "src/Foo.elm",
+            "internalHelper",
+            "formatName",
+        ])
         .output()
         .unwrap();
 
@@ -98,7 +104,13 @@ fn rename_project_wide() {
 
     let output = elmq()
         .current_dir(root)
-        .args(["rename", "src/Lib/Utils.elm", "helper", "formatName"])
+        .args([
+            "rename",
+            "decl",
+            "src/Lib/Utils.elm",
+            "helper",
+            "formatName",
+        ])
         .output()
         .unwrap();
 
@@ -146,6 +158,7 @@ fn rename_dry_run() {
         .current_dir(root)
         .args([
             "rename",
+            "decl",
             "src/Lib/Utils.elm",
             "helper",
             "formatName",
@@ -175,6 +188,7 @@ fn rename_json_output() {
         .current_dir(root)
         .args([
             "rename",
+            "decl",
             "src/Lib/Utils.elm",
             "helper",
             "formatName",
@@ -208,7 +222,13 @@ fn rename_variant() {
 
     let output = elmq()
         .current_dir(root)
-        .args(["rename", "src/Foo.elm", "GotResponse", "ReceivedResponse"])
+        .args([
+            "rename",
+            "decl",
+            "src/Foo.elm",
+            "GotResponse",
+            "ReceivedResponse",
+        ])
         .output()
         .unwrap();
 
@@ -248,6 +268,7 @@ fn rename_variant_project_wide() {
         .current_dir(root)
         .args([
             "rename",
+            "decl",
             "src/Lib/Types.elm",
             "GotResponse",
             "ReceivedResponse",
@@ -292,7 +313,7 @@ fn rename_not_found() {
 
     let output = elmq()
         .current_dir(root)
-        .args(["rename", "src/Foo.elm", "nonexistent", "newName"])
+        .args(["rename", "decl", "src/Foo.elm", "nonexistent", "newName"])
         .output()
         .unwrap();
 
@@ -316,7 +337,7 @@ fn rename_conflict() {
 
     let output = elmq()
         .current_dir(root)
-        .args(["rename", "src/Foo.elm", "foo", "bar"])
+        .args(["rename", "decl", "src/Foo.elm", "foo", "bar"])
         .output()
         .unwrap();
 
@@ -335,7 +356,7 @@ fn rename_type_project_wide() {
 
     let output = elmq()
         .current_dir(root)
-        .args(["rename", "src/Lib/Utils.elm", "Model", "AppModel"])
+        .args(["rename", "decl", "src/Lib/Utils.elm", "Model", "AppModel"])
         .output()
         .unwrap();
 
@@ -369,7 +390,7 @@ fn rename_rejects_broken_source_file() {
 
     let output = elmq()
         .current_dir(root)
-        .args(["rename", "src/Broken.elm", "bar", "baz"])
+        .args(["rename", "decl", "src/Broken.elm", "bar", "baz"])
         .output()
         .unwrap();
 
@@ -402,7 +423,7 @@ fn rename_rejects_when_downstream_file_is_broken() {
 
     let output = elmq()
         .current_dir(root)
-        .args(["rename", "src/Lib.elm", "helper", "helper2"])
+        .args(["rename", "decl", "src/Lib.elm", "helper", "helper2"])
         .output()
         .unwrap();
 

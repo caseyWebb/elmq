@@ -42,7 +42,7 @@ cargo install --path .
 
 ### Write-safety precondition
 
-Every elmq command that mutates a `.elm` file — `set`, `patch`, `rm`, `import`, `expose`/`unexpose`, `mv`, `rename`, `move-decl`, `variant add`/`rm` — refuses to operate on a file that has pre-existing tree-sitter parse errors, and refuses to produce an output buffer that would not parse. If either check fires, elmq exits non-zero with a `refusing to edit …` or `rejected '<op>' write to …` message naming the file and the first error location, and the file on disk is left unchanged. Fix the file by hand (or with your editor) and retry. Read commands (`list`, `get`, `grep`, `refs`, `variant cases`) keep their existing tolerant behavior — they print a warning and continue so you can still inspect broken files.
+Every elmq command that mutates a `.elm` file — `set decl`, `patch`, `rm decl`, `add/rm import`, `expose`/`unexpose`, `mv`, `rename decl`, `move-decl`, `add/rm variant`, `set let`, `set case`, `rm let`, `rm case`, `rm arg`, `rename let`, `rename arg`, `add arg` — refuses to operate on a file that has pre-existing tree-sitter parse errors, and refuses to produce an output buffer that would not parse. If either check fires, elmq exits non-zero with a `refusing to edit …` or `rejected '<op>' write to …` message naming the file and the first error location, and the file on disk is left unchanged. Fix the file by hand (or with your editor) and retry. All write commands confirm success with `ok` output (sole exception: `rm variant` emits an actionable `references_not_rewritten` advisory section when the removed constructor appears in non-cleanly-rewritable positions). Read commands (`list`, `get`, `grep`, `refs`, `variant cases`) keep their existing tolerant behavior — they print a warning and continue so you can still inspect broken files.
 
 ### File summary
 
@@ -120,14 +120,16 @@ Each `-f` group is a file followed by one or more names. Output is framed as `##
 
 ```sh
 echo 'helper x =
-    x + 42' | elmq set src/Main.elm
+    x + 42' | elmq set decl src/Main.elm
 ```
 
-Reads a full declaration from stdin, parses the name, and replaces the existing declaration (or appends if new). Use `--name` to override:
+Reads a full declaration from stdin, parses the name, and replaces the existing declaration (or appends if new). Use `--content` to pass the declaration inline instead of stdin:
 
 ```sh
-echo 'renamed x = x + 1' | elmq set src/Main.elm --name helper
+elmq set decl src/Main.elm --content 'helper x = x + 1'
 ```
+
+A name mismatch between the declaration source and the target is an error; use `rename decl` to rename instead of upsert.
 
 ### Patch a declaration
 
@@ -140,7 +142,7 @@ Surgical find-and-replace scoped to a single declaration. The `--old` string mus
 ### Remove a declaration
 
 ```sh
-elmq rm src/Main.elm helper
+elmq rm decl src/Main.elm helper
 ```
 
 Removes the declaration, its type annotation, and doc comment. Cleans up excess blank lines.
@@ -148,11 +150,11 @@ Removes the declaration, its type annotation, and doc comment. Cleans up excess 
 ### Manage imports
 
 ```sh
-elmq import add src/Main.elm "Browser exposing (element)"
-elmq import remove src/Main.elm Html
+elmq add import src/Main.elm "Browser exposing (element)"
+elmq rm import src/Main.elm Html
 ```
 
-`import add` inserts in alphabetical order or replaces an existing import with the same module name.
+`add import` inserts in alphabetical order or replaces an existing import with the same module name.
 
 ### Manage exposing list
 
@@ -181,7 +183,7 @@ Renames the file, updates the module declaration, and rewrites all imports and q
 ### Rename a declaration
 
 ```sh
-elmq rename src/Main.elm helper newHelper
+elmq rename decl src/Main.elm helper newHelper
 ```
 
 ```
@@ -218,19 +220,6 @@ src/Main.elm:7: Lib.Utils.helper model
 
 Resolves fully-qualified references (`Lib.Utils.helper`), aliased references (`LU.helper`), and explicitly-exposed names. Requires `elm.json` in a parent directory.
 
-### Rename a declaration
-
-```sh
-elmq rename src/Main.elm helper helperV2
-```
-
-```
-renamed helper -> helperV2
-updated src/Page/Home.elm
-```
-
-Renames a declaration (or type constructor) and updates all references across the project. Handles qualified, aliased, and bare-exposed references. Use `--dry-run` to preview changes.
-
 ### Move declarations between modules
 
 ```sh
@@ -253,11 +242,11 @@ Use `--copy-shared-helpers` to duplicate (not move) helpers that are used by bot
 ### Add/remove type variant constructors
 
 ```sh
-elmq variant add src/Types.elm --type Msg "SetName String"
+elmq add variant src/Types.elm --type Msg "SetName String"
 ```
 
 ```
-added SetName to Msg in src/Types.elm
+ok
   src/Update.elm:22  update      — inserted branch
   src/View.elm:15    label       — inserted branch
   src/Main.elm:31    update      — skipped (wildcard branch covers new variant)
@@ -290,34 +279,34 @@ update msg model =
 ```
 
 ```sh
-elmq variant add src/Types.elm --type Msg "Reset" \
+elmq add variant src/Types.elm --type Msg "Reset" \
   --fill 'update=Reset -> { model | count = 0 }' \
   --fill 'label=Reset -> "reset"'
 ```
 
-`variant cases` is read-only and returns every case expression project-wide that matches the target type, with its enclosing function body (including type annotation) and a stable site key. Pass those keys to `--fill <key>=<branch_text>` (repeatable) on `variant add` to replace the default `Debug.todo "<Variant>"` stub with real branch bodies in the same call. Unmatched fill keys fail validation before any file is touched; unfilled sites fall back to `Debug.todo` stubs (graceful degradation).
+`variant cases` is read-only and returns every case expression project-wide that matches the target type, with its enclosing function body (including type annotation) and a stable site key. Pass those keys to `--fill <key>=<branch_text>` (repeatable) on `add variant` to replace the default `Debug.todo "<Variant>"` stub with real branch bodies in the same call. Unmatched fill keys fail validation before any file is touched; unfilled sites fall back to `Debug.todo` stubs (graceful degradation).
 
 When one function contains multiple case expressions on the same type, or two files both define a function with the same name, `variant cases` disambiguates with `function#N` or `file:function` keys. Passing an ambiguous bare key to `--fill` errors with the valid alternatives listed.
 
 ```sh
-elmq variant rm src/Types.elm --type Msg Decrement
+elmq rm variant src/Types.elm --type Msg Decrement
 ```
 
 ```
-removed Decrement from Msg in src/Types.elm
+ok
   src/Update.elm:22  update  — removed branch
   src/View.elm:15    label   — removed branch
 ```
 
-Removes a constructor and its matching branches from all case expressions — including nested patterns like `Just Decrement -> ...`. Errors if removing the last variant (use `elmq rm` instead). Use `--dry-run` to preview changes.
+Removes a constructor and its matching branches from all case expressions — including nested patterns like `Just Decrement -> ...`. Errors if removing the last variant (use `elmq rm decl` instead). Use `--dry-run` to preview changes.
 
-When the constructor is also used outside case branches (expression position, refutable patterns in function/lambda/let arguments), `variant rm` emits a `references not rewritten` advisory section listing every such site with its file, line, enclosing declaration, and classification so the agent can fix them by hand before running `elm make`:
+When the constructor is also used outside case branches (expression position, refutable patterns in function/lambda/let arguments), `rm variant` emits a `references_not_rewritten` advisory section listing every such site with its file, line, enclosing declaration, and classification so the agent can fix them by hand before running `elm make`:
 
 ```
-removed Increment from Msg in src/Types.elm
+ok
   src/Update.elm:47  update  — removed branch
 
-references not rewritten (2):
+references_not_rewritten (2):
   src/Init.elm:15  init      expression-position
       init = ( Model 0, Cmd.map Wrap (Increment 1) )
   src/Debug.elm:8  debugMsg  expression-position
@@ -325,7 +314,7 @@ references not rewritten (2):
   run `elm make` to confirm and fix these before continuing
 ```
 
-The advisory is the *same data* surfaced by `variant refs` (see below), included in the rm output so the removal loop is one or two `elmq` touches at most — don't chain `variant refs` into the rm flow.
+The advisory is the *same data* surfaced by `elmq refs` (see below), included in the rm output so the removal loop is one or two `elmq` touches at most — don't chain `elmq refs` into the rm flow.
 
 ### Audit constructor references
 
@@ -348,7 +337,7 @@ src/Debug.elm
         debugMsg m = m == Increment 0
 ```
 
-Walks the entire project and classifies every reference by its syntactic role: `case-branch` and `case-wildcard-covered` are "clean" (what `variant rm` would rewrite); `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, and `expression-position` are "blocking" (what `variant rm` would leave for the agent). Use it to audit whether a constructor is still needed, to plan a rename, or to understand the blast radius of a type change — independent of any removal flow. `--format json` emits `total_sites`, `total_clean`, `total_blocking`, and a flat `sites` array with `file`, `line`, `column`, `declaration`, `kind`, and `snippet` per entry.
+Walks the entire project and classifies every reference by its syntactic role: `case-branch` and `case-wildcard-covered` are "clean" (what `rm variant` would rewrite); `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, and `expression-position` are "blocking" (what `rm variant` would leave for the agent). Use it to audit whether a constructor is still needed, to plan a rename, or to understand the blast radius of a type change — independent of any removal flow. `--format json` emits `total_sites`, `total_clean`, `total_blocking`, and a flat `sites` array with `file`, `line`, `column`, `declaration`, `kind`, and `snippet` per entry.
 
 Decl and constructor names can be mixed in a single `elmq refs` call; each is framed under its own `## <arg>` header.
 
