@@ -10,6 +10,9 @@ Designed as a next-gen LSP for agents and scripts, not editors. Optimized for to
 
 > **Status:** Active development. Supports reading and writing Elm declarations, imports, and module lines, plus project-wide operations (rename, move, extract, add/remove variant). See [ROADMAP.md](ROADMAP.md) for what's planned.
 
+> [!TIP]
+> Curious why elmq exists and what it's trying to prove? Read [HYPOTHESIS.md](HYPOTHESIS.md) for the claim, the experimental design, and the threats to validity.
+
 ## Install
 
 ### Homebrew
