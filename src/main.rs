@@ -28,6 +28,31 @@ fn load_and_parse(file: &Path) -> Result<(String, FileSummary)> {
     Ok((source, summary))
 }
 
+/// Write-path read helper. Unlike `load_and_parse`, this returns an error
+/// (not a warning) when tree-sitter produces any ERROR or MISSING nodes,
+/// so write commands refuse to splice edits into an already-damaged CST.
+/// Read-only commands keep using `load_and_parse`.
+fn load_and_parse_for_write(file: &Path) -> Result<(String, FileSummary)> {
+    let source = std::fs::read_to_string(file)
+        .with_context(|| format!("could not read file: {}", file.display()))?;
+
+    let tree = parser::ensure_clean_parse(&source, file)?;
+    let summary = parser::extract_summary(&tree, &source);
+    Ok((source, summary))
+}
+
+/// Read-and-validate helper for write commands that re-parse the source
+/// inside a per-iteration loop (rm, import, expose, unexpose). Performs
+/// the same hard `has_error()` check up front, then returns just the
+/// source string — the loop bodies already construct their own summaries
+/// after each mutation.
+fn load_source_for_write(file: &Path) -> Result<String> {
+    let source = std::fs::read_to_string(file)
+        .with_context(|| format!("could not read file: {}", file.display()))?;
+    parser::ensure_clean_parse(&source, file)?;
+    Ok(source)
+}
+
 fn read_stdin() -> Result<String> {
     let mut buf = String::new();
     std::io::stdin()
@@ -137,7 +162,7 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
         }
 
         Command::Set { file, name } => {
-            let (source, summary) = load_and_parse(&file)?;
+            let (source, summary) = load_and_parse_for_write(&file)?;
             let new_source = read_stdin()?;
 
             let decl_name = if let Some(name) = name {
@@ -149,7 +174,7 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
             };
 
             let result = writer::upsert_declaration(&source, &summary, &decl_name, &new_source);
-            writer::atomic_write(&file, &result)?;
+            writer::validated_write(&file, &result, "set")?;
             Ok(0)
         }
 
@@ -159,9 +184,9 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
             old,
             new,
         } => {
-            let (source, summary) = load_and_parse(&file)?;
+            let (source, summary) = load_and_parse_for_write(&file)?;
             let result = writer::patch_declaration(&source, &summary, &name, &old, &new)?;
-            writer::atomic_write(&file, &result)?;
+            writer::validated_write(&file, &result, "patch")?;
             Ok(0)
         }
 
@@ -814,8 +839,7 @@ fn format_get_json_multi(
 // ---------------- rm ----------------
 
 fn run_rm(file: PathBuf, names: Vec<String>) -> Result<i32> {
-    let original = std::fs::read_to_string(&file)
-        .with_context(|| format!("could not read file: {}", file.display()))?;
+    let original = load_source_for_write(&file)?;
 
     // Apply each removal against an accumulating source, reparsing between
     // iterations because line ranges shift after each removal.
@@ -841,7 +865,7 @@ fn run_rm(file: PathBuf, names: Vec<String>) -> Result<i32> {
     }
 
     if any_change {
-        writer::atomic_write(&file, &accumulator)?;
+        writer::validated_write(&file, &accumulator, "rm")?;
     }
 
     let (out, code) = format_results(&entries);
@@ -852,8 +876,7 @@ fn run_rm(file: PathBuf, names: Vec<String>) -> Result<i32> {
 // ---------------- import add / remove ----------------
 
 fn run_import_add(file: PathBuf, imports: Vec<String>) -> Result<i32> {
-    let original = std::fs::read_to_string(&file)
-        .with_context(|| format!("could not read file: {}", file.display()))?;
+    let original = load_source_for_write(&file)?;
 
     let mut accumulator = original.clone();
     let mut entries: Vec<(String, ItemResult)> = Vec::with_capacity(imports.len());
@@ -877,7 +900,7 @@ fn run_import_add(file: PathBuf, imports: Vec<String>) -> Result<i32> {
     }
 
     if any_change {
-        writer::atomic_write(&file, &accumulator)?;
+        writer::validated_write(&file, &accumulator, "import add")?;
     }
 
     let (out, code) = format_results(&entries);
@@ -886,8 +909,7 @@ fn run_import_add(file: PathBuf, imports: Vec<String>) -> Result<i32> {
 }
 
 fn run_import_remove(file: PathBuf, module_names: Vec<String>) -> Result<i32> {
-    let original = std::fs::read_to_string(&file)
-        .with_context(|| format!("could not read file: {}", file.display()))?;
+    let original = load_source_for_write(&file)?;
 
     let mut accumulator = original.clone();
     let mut entries: Vec<(String, ItemResult)> = Vec::with_capacity(module_names.len());
@@ -909,7 +931,7 @@ fn run_import_remove(file: PathBuf, module_names: Vec<String>) -> Result<i32> {
     }
 
     if any_change {
-        writer::atomic_write(&file, &accumulator)?;
+        writer::validated_write(&file, &accumulator, "import remove")?;
     }
 
     let (out, code) = format_results(&entries);
@@ -920,8 +942,7 @@ fn run_import_remove(file: PathBuf, module_names: Vec<String>) -> Result<i32> {
 // ---------------- expose / unexpose ----------------
 
 fn run_expose(file: PathBuf, items: Vec<String>) -> Result<i32> {
-    let original = std::fs::read_to_string(&file)
-        .with_context(|| format!("could not read file: {}", file.display()))?;
+    let original = load_source_for_write(&file)?;
 
     let mut accumulator = original.clone();
     let mut entries: Vec<(String, ItemResult)> = Vec::with_capacity(items.len());
@@ -947,7 +968,7 @@ fn run_expose(file: PathBuf, items: Vec<String>) -> Result<i32> {
     }
 
     if any_change {
-        writer::atomic_write(&file, &accumulator)?;
+        writer::validated_write(&file, &accumulator, "expose")?;
     }
 
     let (out, code) = format_results(&entries);
@@ -956,8 +977,7 @@ fn run_expose(file: PathBuf, items: Vec<String>) -> Result<i32> {
 }
 
 fn run_unexpose(file: PathBuf, items: Vec<String>) -> Result<i32> {
-    let original = std::fs::read_to_string(&file)
-        .with_context(|| format!("could not read file: {}", file.display()))?;
+    let original = load_source_for_write(&file)?;
 
     let mut accumulator = original.clone();
     let mut entries: Vec<(String, ItemResult)> = Vec::with_capacity(items.len());
@@ -983,7 +1003,7 @@ fn run_unexpose(file: PathBuf, items: Vec<String>) -> Result<i32> {
     }
 
     if any_change {
-        writer::atomic_write(&file, &accumulator)?;
+        writer::validated_write(&file, &accumulator, "unexpose")?;
     }
 
     let (out, code) = format_results(&entries);

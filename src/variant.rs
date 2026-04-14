@@ -1361,10 +1361,20 @@ fn append_variant_to_type(
                 bail!("type {type_name} has no variants");
             };
 
-            // Get indentation of existing variants.
+            // Get indentation of existing variants. A single-line type
+            // declaration like `type Msg = A | B` has its variants on the
+            // same line as the `type` keyword, so their leading column is
+            // 0 — continuing with `\n| NewVariant` at column 1 produces
+            // invalid Elm. In that case fall back to Elm's conventional
+            // 4-space continuation indent.
             let variant_line = last.start_position().row;
             let variant_line_text = source.lines().nth(variant_line).unwrap_or("");
-            let indent = variant_line_text.len() - variant_line_text.trim_start().len();
+            let measured_indent = variant_line_text.len() - variant_line_text.trim_start().len();
+            let indent = if measured_indent == 0 {
+                4
+            } else {
+                measured_indent
+            };
             let indent_str = " ".repeat(indent);
 
             // Insert after the last variant's line.
@@ -1512,19 +1522,29 @@ fn insert_case_branch(source: &str, case_node: &Node, new_branch: &str) -> Strin
 
 /// Remove a branch from a case expression.
 fn remove_case_branch(source: &str, branch: &MatchingBranch) -> String {
-    // Find the start of the line containing the branch.
+    // Start of the line containing the branch (byte after the preceding
+    // newline, or 0 if there is none).
     let line_start = source[..branch.byte_range.start]
         .rfind('\n')
-        .unwrap_or(branch.byte_range.start);
+        .map(|i| i + 1)
+        .unwrap_or(0);
 
-    // Find the end: include trailing whitespace/blank lines up to next branch.
+    // Walk forward past trailing whitespace to find the next non-blank
+    // byte, then backtrack to the newline immediately before it. That
+    // newline marks where the next branch's line begins, so stripping
+    // up to (and including) that newline preserves the next branch's
+    // indent while removing any blank line that separated the two.
+    // When the removed branch is the final one, the `rfind` fallback
+    // keeps behavior sane by collapsing to `branch.byte_range.end` so
+    // we only drop the trailing whitespace we can safely absorb.
     let after = &source[branch.byte_range.end..];
     let trailing = after
         .find(|c: char| !c.is_whitespace())
         .unwrap_or(after.len());
-
-    // Check if there's a blank line between branches — keep one newline.
-    let remove_end = branch.byte_range.end + trailing;
+    let remove_end = match after[..trailing].rfind('\n') {
+        Some(idx) => branch.byte_range.end + idx + 1,
+        None => branch.byte_range.end,
+    };
 
     let mut result = String::with_capacity(source.len());
     result.push_str(&source[..line_start]);
@@ -1573,7 +1593,7 @@ pub fn execute_add_variant(
     // Verify the type exists and the constructor doesn't already exist.
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("could not read {}", file.display()))?;
-    let tree = parser::parse(&source)?;
+    let tree = parser::ensure_clean_parse(&source, file)?;
 
     // Check type exists.
     {
@@ -1646,10 +1666,10 @@ pub fn execute_add_variant(
         let starting_source = if file_path == file {
             new_source.clone()
         } else {
-            match std::fs::read_to_string(&file_path) {
-                Ok(s) => s,
-                Err(_) => continue,
-            }
+            let s = std::fs::read_to_string(&file_path)
+                .with_context(|| format!("could not read {}", file_path.display()))?;
+            parser::ensure_clean_parse(&s, &file_path)?;
+            s
         };
         let mut modified_source = starting_source.clone();
 
@@ -1723,7 +1743,7 @@ pub fn execute_add_variant(
     // Step 4: Write all files atomically.
     if !dry_run {
         for (path, content) in &pending_writes {
-            writer::atomic_write(path, content)?;
+            writer::validated_write(path, content, "variant add")?;
         }
     }
 
@@ -1974,7 +1994,7 @@ pub fn execute_rm_variant(
     // Step 2: Remove the variant from the type declaration.
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("could not read {}", file.display()))?;
-    let tree = parser::parse(&source)?;
+    let tree = parser::ensure_clean_parse(&source, file)?;
 
     let new_source = remove_variant_from_type(&source, &tree, type_name, constructor_name)?;
 
@@ -1987,15 +2007,10 @@ pub fn execute_rm_variant(
     pending_writes.push((file.to_path_buf(), new_source));
 
     for elm_file in &elm_files {
-        let file_source = match std::fs::read_to_string(elm_file) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
+        let file_source = std::fs::read_to_string(elm_file)
+            .with_context(|| format!("could not read {}", elm_file.display()))?;
 
-        let file_tree = match parser::parse(&file_source) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
+        let file_tree = parser::ensure_clean_parse(&file_source, elm_file)?;
 
         let root = file_tree.root_node();
         let import_ctx = ImportContext::from_tree(&root, &file_source);
@@ -2102,7 +2117,7 @@ pub fn execute_rm_variant(
     // Step 5: Write all files atomically.
     if !dry_run {
         for (path, content) in &pending_writes {
-            writer::atomic_write(path, content)?;
+            writer::validated_write(path, content, "variant rm")?;
         }
     }
 

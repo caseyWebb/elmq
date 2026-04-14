@@ -16,6 +16,30 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
+/// Re-parse `content` with tree-sitter-elm and refuse to write if the
+/// result has any ERROR or MISSING nodes, then delegate to `atomic_write`.
+///
+/// Every elmq command that mutates Elm source MUST route its final
+/// buffer through this helper (not `atomic_write` directly) so we never
+/// commit a syntactically broken file to disk. `op` is a short label
+/// for the operation (e.g. `"set"`, `"variant add"`) used in the error
+/// message so multi-file commands name the failing step clearly.
+pub fn validated_write(path: &Path, content: &str, op: &str) -> Result<()> {
+    let tree = parser::parse(content)
+        .with_context(|| format!("failed to re-parse output buffer for {}", path.display()))?;
+    if tree.root_node().has_error() {
+        let where_ = match parser::first_error_location(&tree, content) {
+            Some((line, col)) => format!(" at {line}:{col}"),
+            None => String::new(),
+        };
+        bail!(
+            "rejected '{op}' write to {}: output would not parse{where_}",
+            path.display()
+        );
+    }
+    atomic_write(path, content)
+}
+
 /// Upsert a declaration. If a declaration with the given name exists, replace it;
 /// otherwise append after the last declaration.
 pub fn upsert_declaration(
@@ -371,6 +395,13 @@ fn replace_exposing(module_decl: &str, new_exposing: &str) -> Result<String> {
         "{}exposing {new_exposing}",
         &module_decl[..exposing_idx]
     ))
+}
+
+/// Crate-visible wrapper around `replace_exposing` for callers outside
+/// this module (notably `move_decl` when it needs to fall back to
+/// `exposing (..)` instead of producing an empty list).
+pub(crate) fn replace_exposing_public(module_decl: &str, new_exposing: &str) -> Result<String> {
+    replace_exposing(module_decl, new_exposing)
 }
 
 fn expand_expose_all(summary: &FileSummary) -> Vec<String> {
@@ -927,6 +958,47 @@ fn collapse_blank_lines(source: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validated_write_accepts_valid_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Foo.elm");
+        let source = "module Foo exposing (bar)\n\nbar : Int\nbar = 1\n";
+        validated_write(&path, source, "set").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    }
+
+    #[test]
+    fn test_validated_write_rejects_broken_output_and_leaves_file_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Foo.elm");
+        let original = "module Foo exposing (bar)\n\nbar = 1\n";
+        std::fs::write(&path, original).unwrap();
+
+        let broken = "module Foo exposing (bar)\n\nbar =\n";
+        let err = validated_write(&path, broken, "set").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("rejected 'set' write"), "msg: {msg}");
+        assert!(msg.contains("Foo.elm"), "msg: {msg}");
+        assert!(
+            msg.contains(" at "),
+            "expected a line:col suffix, got: {msg}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "target file must be unchanged when validation fails"
+        );
+    }
+
+    #[test]
+    fn test_validated_write_rejects_without_creating_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Nope.elm");
+        let broken = "module Nope exposing (..)\n\nfoo =\n    let\n        x = 1\n";
+        assert!(validated_write(&path, broken, "patch").is_err());
+        assert!(!path.exists(), "path must not be created on rejection");
+    }
 
     #[test]
     fn test_rename_import() {

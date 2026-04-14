@@ -140,3 +140,56 @@ fn patch_multiline_old_string() {
     assert!(content.contains("module Main exposing (..)"));
     assert!(content.contains("model.count - 1"));
 }
+
+const BROKEN: &str = "module Broken exposing (bar)\n\nbar =\n    let\n        x = 1\n";
+
+#[test]
+fn patch_rejects_input_with_parse_errors() {
+    let f = with_temp_elm(BROKEN);
+    let path = f.path().to_str().unwrap();
+    let before = std::fs::read(f.path()).unwrap();
+
+    let output = elmq()
+        .args(["patch", path, "bar", "--old", "x", "--new", "y"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("refusing to edit") && stderr.contains(path),
+        "stderr: {stderr}"
+    );
+    assert_eq!(std::fs::read(f.path()).unwrap(), before);
+}
+
+#[test]
+fn patch_rejects_output_that_would_not_parse() {
+    let f = with_temp_elm(SAMPLE);
+    let path = f.path().to_str().unwrap();
+    let before = std::fs::read(f.path()).unwrap();
+
+    // Replace a valid expression with an unbalanced brace — splice produces
+    // a buffer that tree-sitter rejects.
+    let output = elmq()
+        .args([
+            "patch",
+            path,
+            "update",
+            "--old",
+            "{ model | count = model.count + 1 }",
+            "--new",
+            "{ model | count = model.count + 1",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("rejected 'patch' write") && stderr.contains(path),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains(" at "), "stderr lacks line:col: {stderr}");
+    assert_eq!(std::fs::read(f.path()).unwrap(), before);
+}

@@ -881,3 +881,65 @@ check (Cred u _) =
         "expected source to import Cred(..) from Auth, got:\n{source}"
     );
 }
+
+#[test]
+fn move_decl_rejects_broken_source_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Source.elm",
+        "module Source exposing (bar)\n\nbar =\n    let\n        x = 1\n",
+    );
+    write_elm(root, "src/Target.elm", "module Target exposing (..)\n");
+    let source_before = fs::read(root.join("src/Source.elm")).unwrap();
+    let target_before = fs::read(root.join("src/Target.elm")).unwrap();
+
+    let result = run_move(root, "src/Source.elm", &["bar"], "src/Target.elm", false);
+
+    assert!(result.is_err(), "expected error, got {result:?}");
+    let msg = format!("{:#}", result.unwrap_err());
+    assert!(msg.contains("refusing to edit"), "msg: {msg}");
+    assert_eq!(
+        fs::read(root.join("src/Source.elm")).unwrap(),
+        source_before
+    );
+    assert_eq!(
+        fs::read(root.join("src/Target.elm")).unwrap(),
+        target_before
+    );
+}
+
+#[test]
+fn move_decl_rejects_broken_target_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Source.elm",
+        "module Source exposing (bar)\n\nbar : Int\nbar = 1\n",
+    );
+    write_elm(
+        root,
+        "src/Target.elm",
+        "module Target exposing (..)\n\nfoo =\n    let\n        x = 1\n",
+    );
+    let source_before = fs::read(root.join("src/Source.elm")).unwrap();
+    let target_before = fs::read(root.join("src/Target.elm")).unwrap();
+
+    let result = run_move(root, "src/Source.elm", &["bar"], "src/Target.elm", false);
+
+    assert!(result.is_err(), "expected error, got {result:?}");
+    let msg = format!("{:#}", result.unwrap_err());
+    assert!(msg.contains("refusing to edit"), "msg: {msg}");
+    assert_eq!(
+        fs::read(root.join("src/Source.elm")).unwrap(),
+        source_before
+    );
+    assert_eq!(
+        fs::read(root.join("src/Target.elm")).unwrap(),
+        target_before
+    );
+}
