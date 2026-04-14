@@ -1,3 +1,7 @@
+pub mod case_branch;
+pub mod function_arg;
+pub mod let_binding;
+
 use crate::FileSummary;
 use crate::parser;
 use anyhow::{Context, Result, bail};

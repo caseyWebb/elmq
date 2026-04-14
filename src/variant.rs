@@ -1182,55 +1182,19 @@ fn top_most_ancestor<'a>(node: &Node<'a>) -> Node<'a> {
 /// 4. `<file>:<function>#<N>` when (3) and one of those files has multiple cases in that function.
 ///
 /// Ordinals are 1-based and source-ordered by `byte_range.start`.
-fn compute_site_keys(sites: &[CaseSite]) -> Vec<String> {
-    let mut keys = vec![String::new(); sites.len()];
-
-    // Group indices by bare function name.
-    let mut by_function: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (i, site) in sites.iter().enumerate() {
-        by_function
-            .entry(site.function.clone())
-            .or_default()
-            .push(i);
+impl crate::analysis::SiteKeyable for CaseSite {
+    fn function_name(&self) -> &str {
+        &self.function
     }
-
-    for (fname, indices) in by_function {
-        if indices.len() == 1 {
-            keys[indices[0]] = fname;
-            continue;
-        }
-
-        // Subgroup by file display path.
-        let mut by_file: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        for &i in &indices {
-            by_file.entry(sites[i].display.clone()).or_default().push(i);
-        }
-
-        if by_file.len() == 1 {
-            // All sites in one file: disambiguate with #N.
-            let mut sorted = indices;
-            sorted.sort_by_key(|&i| sites[i].byte_range.start);
-            for (ord, i) in sorted.into_iter().enumerate() {
-                keys[i] = format!("{}#{}", fname, ord + 1);
-            }
-        } else {
-            // Sites span multiple files: prefix with file:
-            for (file, file_indices) in by_file {
-                if file_indices.len() == 1 {
-                    keys[file_indices[0]] = format!("{}:{}", file, fname);
-                } else {
-                    let mut sorted = file_indices;
-                    sorted.sort_by_key(|&i| sites[i].byte_range.start);
-                    for (ord, i) in sorted.into_iter().enumerate() {
-                        keys[i] = format!("{}:{}#{}", file, fname, ord + 1);
-                    }
-                }
-            }
-        }
+    fn display_path(&self) -> &str {
+        &self.display
     }
-
-    keys
+    fn byte_start(&self) -> usize {
+        self.byte_range.start
+    }
 }
+
+use crate::analysis::compute_site_keys;
 
 fn collect_case_exprs(
     node: &Node,

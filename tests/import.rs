@@ -31,7 +31,7 @@ fn import_add_new() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["import", "add", path, "Browser exposing (element)"])
+        .args(["add", "import", path, "Browser exposing (element)"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -51,8 +51,8 @@ fn import_add_replace_existing() {
 
     let output = elmq()
         .args([
-            "import",
             "add",
+            "import",
             path,
             "Html exposing (Html, div, text, span)",
         ])
@@ -71,7 +71,7 @@ fn import_add_to_file_with_no_imports() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["import", "add", path, "Html exposing (Html)"])
+        .args(["add", "import", path, "Html exposing (Html)"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -86,7 +86,7 @@ fn import_remove_existing() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["import", "remove", path, "Html"])
+        .args(["rm", "import", path, "Html"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -106,7 +106,7 @@ fn import_remove_not_found_is_idempotent_noop() {
     let before = std::fs::read_to_string(f.path()).unwrap();
 
     let output = elmq()
-        .args(["import", "remove", path, "NonExistent"])
+        .args(["rm", "import", path, "NonExistent"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -120,7 +120,7 @@ fn import_add_with_import_prefix() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["import", "add", path, "import Browser exposing (element)"])
+        .args(["add", "import", path, "import Browser exposing (element)"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -137,7 +137,7 @@ fn import_remove_last_import() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["import", "remove", path, "Html"])
+        .args(["rm", "import", path, "Html"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -155,8 +155,8 @@ fn import_add_multi_clause_success() {
 
     let output = elmq()
         .args([
-            "import",
             "add",
+            "import",
             path,
             "Http",
             "Json.Decode exposing (field)",
@@ -187,8 +187,8 @@ fn import_add_multi_clause_last_wins() {
 
     let output = elmq()
         .args([
-            "import",
             "add",
+            "import",
             path,
             "Html exposing (div)",
             "Html exposing (text)",
@@ -209,8 +209,8 @@ fn import_add_multi_clause_input_order_headers() {
 
     let output = elmq()
         .args([
-            "import",
             "add",
+            "import",
             path,
             "Json.Decode exposing (field)",
             "Http",
@@ -238,7 +238,7 @@ fn import_remove_multi_module_success() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["import", "remove", path, "Html", "Html.Attributes"])
+        .args(["rm", "import", path, "Html", "Html.Attributes"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -255,8 +255,8 @@ fn import_remove_multi_module_partial_idempotent() {
 
     let output = elmq()
         .args([
+            "rm",
             "import",
-            "remove",
             path,
             "Html",
             "NonExistent",
@@ -278,7 +278,7 @@ fn import_single_clause_output_unchanged() {
     let path = f.path().to_str().unwrap();
 
     let output = elmq()
-        .args(["import", "add", path, "Http"])
+        .args(["add", "import", path, "Http"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -299,7 +299,7 @@ fn import_add_rejects_input_with_parse_errors() {
     let before = std::fs::read(f.path()).unwrap();
 
     let output = elmq()
-        .args(["import", "add", path, "Html"])
+        .args(["add", "import", path, "Html"])
         .output()
         .unwrap();
 
@@ -319,7 +319,7 @@ fn import_remove_rejects_input_with_parse_errors() {
     let before = std::fs::read(f.path()).unwrap();
 
     let output = elmq()
-        .args(["import", "remove", path, "Html"])
+        .args(["rm", "import", path, "Html"])
         .output()
         .unwrap();
 

@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod grep;
 pub mod imports;
 pub mod move_decl;

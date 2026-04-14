@@ -32,7 +32,7 @@ fn set_replace_existing() {
     let path = f.path().to_str().unwrap();
 
     let mut child = elmq()
-        .args(["set", path])
+        .args(["set", "decl", path])
         .stdin(Stdio::piped())
         .spawn()
         .unwrap();
@@ -59,7 +59,7 @@ fn set_append_new() {
     let path = f.path().to_str().unwrap();
 
     let mut child = elmq()
-        .args(["set", path])
+        .args(["set", "decl", path])
         .stdin(Stdio::piped())
         .spawn()
         .unwrap();
@@ -81,13 +81,17 @@ fn set_append_new() {
 }
 
 #[test]
-fn set_with_name_override() {
+fn set_name_mismatch_with_parsed_name_errors() {
+    // New behavior: --name that disagrees with the parsed name in the
+    // content errors out instead of silently renaming. To rename a
+    // declaration, use `rename decl`.
     let f = with_temp_elm(SAMPLE);
     let path = f.path().to_str().unwrap();
 
     let mut child = elmq()
-        .args(["set", path, "--name", "helper"])
+        .args(["set", "decl", path, "--name", "helper"])
         .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
 
@@ -98,14 +102,18 @@ fn set_with_name_override() {
         .write_all(b"renamed x =\n    x + 99\n")
         .unwrap();
 
-    let status = child.wait().unwrap();
-    assert!(status.success());
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not match parsed name"),
+        "unexpected stderr: {stderr}"
+    );
 
-    // The old "helper" location should now have the new content
-    // (replaced by --name targeting "helper")
+    // File should be unchanged.
     let content = std::fs::read_to_string(f.path()).unwrap();
-    assert!(content.contains("renamed x ="));
-    assert!(!content.contains("x + 1"));
+    assert!(content.contains("helper x =\n    x + 1"));
+    assert!(!content.contains("renamed x ="));
 }
 
 #[test]
@@ -114,7 +122,7 @@ fn set_parse_error_without_name() {
     let path = f.path().to_str().unwrap();
 
     let mut child = elmq()
-        .args(["set", path])
+        .args(["set", "decl", path])
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -139,7 +147,7 @@ fn set_upsert_type_declaration() {
     let path = f.path().to_str().unwrap();
 
     let mut child = elmq()
-        .args(["set", path])
+        .args(["set", "decl", path])
         .stdin(Stdio::piped())
         .spawn()
         .unwrap();
@@ -169,7 +177,7 @@ fn set_rejects_input_with_parse_errors() {
     let before = std::fs::read(f.path()).unwrap();
 
     let mut child = elmq()
-        .args(["set", path, "--name", "bar"])
+        .args(["set", "decl", path, "--name", "bar"])
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -198,7 +206,7 @@ fn set_rejects_output_that_would_not_parse() {
     let before = std::fs::read(f.path()).unwrap();
 
     let mut child = elmq()
-        .args(["set", path, "--name", "helper"])
+        .args(["set", "decl", path, "--name", "helper"])
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -214,7 +222,7 @@ fn set_rejects_output_that_would_not_parse() {
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("rejected 'set' write") && stderr.contains(path),
+        stderr.contains("rejected 'set decl' write") && stderr.contains(path),
         "stderr: {stderr}"
     );
     assert!(stderr.contains(" at "), "stderr lacks line:col: {stderr}");
@@ -227,7 +235,7 @@ fn set_append_to_file_with_no_declarations() {
     let path = f.path().to_str().unwrap();
 
     let mut child = elmq()
-        .args(["set", path])
+        .args(["set", "decl", path])
         .stdin(Stdio::piped())
         .spawn()
         .unwrap();
@@ -246,4 +254,45 @@ fn set_append_to_file_with_no_declarations() {
     assert!(content.contains("module Main exposing (..)"));
     assert!(content.contains("import Html"));
     assert!(content.contains("view = 1"));
+}
+
+#[test]
+fn set_decl_content_flag_alternative_to_stdin() {
+    let f = with_temp_elm(SAMPLE);
+    let path = f.path().to_str().unwrap();
+
+    let output = elmq()
+        .args(["set", "decl", path, "--content", "newFn = 42"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout, "ok\n");
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+    assert!(content.contains("newFn = 42"));
+}
+
+#[test]
+fn set_decl_name_mismatch_errors() {
+    let f = with_temp_elm("module Main exposing (..)\n\nfoo = 1\n");
+    let path = f.path().to_str().unwrap();
+    let before = std::fs::read_to_string(f.path()).unwrap();
+
+    let output = elmq()
+        .args(["set", "decl", path, "--name", "foo", "--content", "bar = 2"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("does not match parsed name"),
+        "stderr: {stderr}"
+    );
+
+    let after = std::fs::read_to_string(f.path()).unwrap();
+    assert_eq!(after, before);
 }
