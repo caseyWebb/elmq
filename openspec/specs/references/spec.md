@@ -31,3 +31,35 @@ A `refs` invocation SHALL walk each project file at most once, regardless of how
 #### Scenario: Regression guard
 - **WHEN** a unit test instruments file-open or parse calls during a batched `refs` invocation
 - **THEN** the count for each project file SHALL be exactly one
+
+### Requirement: Constructor-aware refs dispatch
+The `refs` subcommand SHALL dispatch each positional name on what it resolves to in the target file. A top-level declaration (value, type, or type alias) SHALL be handled via the existing decl-refs path (flat list of reference sites). A constructor of a custom type declared in the target file SHALL be handled via the constructor classifier, which walks every `upper_case_qid` resolving to the constructor and classifies each site by its syntactic role. Names that are neither SHALL produce the `declaration '<name>' not found` per-arg error. No separate command surface exists for constructor references — the top-level `refs` command is the single entry point.
+
+#### Scenario: Constructor name routed to classifier
+- **GIVEN** `src/Types.elm` declares `type Msg = Increment | Decrement`
+- **WHEN** `elmq refs src/Types.elm Increment` is run
+- **THEN** the output SHALL be a classified report listing every project-wide reference to `Types.Msg.Increment`, with each site tagged as `case-branch`, `case-wildcard-covered`, `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, or `expression-position`, plus a header summarizing total, clean, and blocking counts
+
+#### Scenario: Decl and constructor names in the same call
+- **WHEN** `elmq refs src/Types.elm Increment Msg` is run where `Increment` is a constructor and `Msg` is the type declaration
+- **THEN** the output SHALL contain one `## Increment` block with the classified report and one `## Msg` block with today's decl-refs output, in input order
+
+#### Scenario: Constructor declared in a different file falls through
+- **GIVEN** `Red` is a constructor of `Color` declared in `src/Colors.elm` and NOT in `src/Types.elm`
+- **WHEN** `elmq refs src/Types.elm Red` is run
+- **THEN** the output SHALL report `declaration 'Red' not found` (the name does not resolve as a decl in `src/Types.elm` *or* as a constructor of a type declared there)
+
+#### Scenario: JSON output for constructor refs
+- **WHEN** `elmq refs src/Types.elm Increment --format json` is run (single-arg, so no `## <arg>` framing)
+- **THEN** output SHALL be a JSON object with `type_file`, `type_name`, `constructor`, `total_sites`, `total_clean`, `total_blocking`, and a `sites` array of objects each containing `file`, `line`, `column`, `declaration`, `kind`, and `snippet`
+- **AND** `kind` SHALL be one of `case-branch`, `case-wildcard-covered`, `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, or `expression-position`
+
+#### Scenario: Constructor's own type declaration is excluded
+- **GIVEN** the target file declares `type Msg = Increment | Decrement` and nothing else references `Increment`
+- **WHEN** `elmq refs <file> Increment` is run
+- **THEN** the output SHALL list zero sites (the constructor's own definition inside the `type` declaration is not a reference to itself)
+
+#### Scenario: Nested union patterns are detected
+- **GIVEN** some project file contains `case x of Just Increment -> ...`
+- **WHEN** `elmq refs <file> Increment` is run
+- **THEN** the nested site SHALL be classified as `case-branch` (not silently missed, matching the same guarantee `variant rm` relies on for its branch-removal loop)

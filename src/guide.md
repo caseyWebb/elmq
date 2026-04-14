@@ -48,7 +48,7 @@ $ elmq get src/Api.elm fetchData
 - `elmq list <file...>` — module header, imports, declarations with line ranges, exposing list. **Pass all files in one call**: `elmq list src/Route.elm src/Page.elm src/Main.elm`, not three separate calls.
 - `elmq get -f <file> <name...> [-f <file> <name...> ...]` — read declarations from one or more files. **Combine all files into one call**: `elmq get -f src/Route.elm Route parser -f src/Page.elm Page viewMenu -f src/Main.elm Model Msg update`. Do not issue separate `get` calls per file.
 - `elmq refs <file>` — every project file that imports this module.
-- `elmq refs <file> <name...>` — every project reference to one or more declarations in this file.
+- `elmq refs <file> <name...>` — every project reference to one or more declarations in this file. Each name dispatches on what it resolves to: a top-level declaration produces a flat list of reference sites; a **constructor** of a custom type declared in the file produces a **classified** report (`case-branch`, `case-wildcard-covered`, `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, `expression-position`) with clean/blocking counts — the same data that `variant rm` surfaces in its `references not rewritten` advisory. You can mix decl and constructor names in one call; each is framed under a `## <arg>` header.
 
 ## Editing Elm code
 
@@ -69,7 +69,7 @@ $ elmq get src/Api.elm fetchData
 | Rename a declaration | `elmq rename <file> <old_name> <new_name>` |
 | Extract/move declarations between modules | `elmq move-decl <src> --to <target> <name...>` (creates `<target>` if needed) |
 | Add a type variant + fill case branches | `elmq variant add --type <T> <file> '<Variant>' [--fill <key>=<branch>]...` |
-| Remove a type variant | `elmq variant rm --type <T> <file> <Constructor>` |
+| Remove a type variant | `elmq variant rm --type <T> <file> <Constructor>` (emits an advisory list of any non-case references it could not rewrite) |
 
 **Single-file** — chain these with `&&` when you have several:
 
@@ -127,6 +127,45 @@ elmq patch --old '...' --new '...' src/Theme.elm allThemes
 When one function has two case expressions on the same type, or two files both define a function with the same name, `cases` prints disambiguated keys (`handler#1`, `handler#2`, or `src/Other.elm:handler`) — pass those through.
 
 `--fill` values are `KEY=BRANCH` pairs split on the **first** `=`, so branch bodies containing `=` (e.g. record updates) are fine. The branch text is inserted verbatim with proper indentation; write the full `Pattern -> body` as you would type it into the source.
+
+### Removing a variant
+
+`variant rm` is a single self-contained call. It strips the constructor from the `type` declaration, removes every cleanly-removable case branch project-wide (including nested patterns like `Just Increment -> ...`), and — in the same call — emits a `references not rewritten` section listing every remaining reference it could not touch: construction sites, equality comparisons, partial applications, and refutable patterns in function/lambda/let arguments. Fix those by hand, then run `elm make` to verify. **This is a one- or two-elmq-touch flow at most**: one call when nothing blocks, and the advisory already gives you everything you need for the follow-up edits — don't chain `elmq refs` into the removal loop.
+
+```bash
+$ elmq variant rm src/Types.elm --type Msg Increment
+removed Increment from Msg in src/Types.elm
+  src/Update.elm:47  update  — removed branch
+
+references not rewritten (2):
+  src/Init.elm:15  init      expression-position
+      init = ( Model 0, Cmd.map Wrap (Increment 1) )
+  src/Debug.elm:8  debugMsg  expression-position
+      debugMsg m = m == Increment 0
+  run `elm make` to confirm and fix these before continuing
+```
+
+When the advisory is empty (every reference was a case branch or a wildcard-covered case), the section is omitted and you can skip straight to `elm make`.
+
+### Auditing a constructor (exploration)
+
+For "where is this constructor used?" outside the removal flow — reviewing whether a variant is still needed, planning a rename, or inspecting a type's call sites — use the regular `elmq refs` command with the constructor name. It classifies every reference into the same categories the rm advisory uses and does **not** mutate anything. Reach for it when you want the question answered independent of removal; **do not chain it into `variant rm`** — the rm advisory already gives you the same information for that case, in the same call.
+
+```bash
+$ elmq refs src/Types.elm Increment
+Msg.Increment — 3 references (1 clean, 2 blocking)
+src/Update.elm
+    47  update       case-branch
+        Increment ->
+src/Init.elm
+    15  init         expression-position
+        init = ( Model 0, Cmd.map Wrap (Increment 1) )
+src/Debug.elm
+     8  debugMsg     expression-position
+        debugMsg m = m == Increment 0
+```
+
+Use `--format json` for machine consumption; the JSON payload has `total_sites`, `total_clean`, `total_blocking`, and a flat `sites` array with `file`, `line`, `column`, `declaration`, `kind`, and `snippet` per entry. Mix decl and constructor names in a single `elmq refs` call and each is framed under its own `## <arg>` header.
 
 ## Reference notes
 
