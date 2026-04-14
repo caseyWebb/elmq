@@ -127,12 +127,23 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Find all references to a module or one or more declarations across the project
+    /// Find all references to a module, one or more declarations, or one or more
+    /// type constructors across the project.
+    ///
+    /// Zero names: report every project file that imports the target module.
+    /// Each name: dispatches on what it resolves to in the target file —
+    /// a top-level declaration (value, type, or type alias) produces a flat
+    /// list of reference sites; a constructor of a custom type declared in
+    /// the file produces a classified report (`case-branch`,
+    /// `case-wildcard-covered`, `function-arg-pattern`, `lambda-arg-pattern`,
+    /// `let-binding-pattern`, `expression-position`) with clean/blocking
+    /// counts. The classified output is the same data that `variant rm`
+    /// surfaces in its `references not rewritten` advisory section.
     Refs {
-        /// Path to the Elm file whose module to search for
+        /// Path to the Elm file whose module (or constructors) to search for
         file: PathBuf,
 
-        /// Declaration names to search for (zero or more; if omitted, reports module-level imports)
+        /// Declaration or constructor names to search for (zero or more; if omitted, reports module-level imports)
         #[arg(num_args = 0..)]
         names: Vec<String>,
 
@@ -286,26 +297,6 @@ pub enum VariantCommand {
         /// Name of the custom type (e.g. "Msg")
         #[arg(long = "type")]
         type_name: String,
-
-        /// Output format
-        #[arg(long, value_enum, default_value_t = Format::Compact)]
-        format: Format,
-    },
-    /// List every project-wide reference to a constructor, classified by syntactic role
-    /// (case branch, expression position, function-arg pattern, etc.). Read-only discovery
-    /// command — use before or independent of `variant rm` to audit where a constructor
-    /// is used. Not part of the `variant rm` loop; `variant rm` emits its own advisory
-    /// section alongside its mutation.
-    Refs {
-        /// Path to the Elm file that declares the custom type
-        file: PathBuf,
-
-        /// Name of the custom type (e.g. "Msg")
-        #[arg(long = "type")]
-        type_name: String,
-
-        /// Constructor name to find references for (e.g. "Increment")
-        constructor: String,
 
         /// Output format
         #[arg(long, value_enum, default_value_t = Format::Compact)]

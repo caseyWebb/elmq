@@ -325,8 +325,10 @@ The advisory is the *same data* surfaced by `variant refs` (see below), included
 
 ### Audit constructor references
 
+The regular `elmq refs` command auto-routes on what the name is. For top-level declarations it emits a flat list of call sites; for a constructor of a custom type declared in the target file it emits a **classified** report:
+
 ```sh
-elmq variant refs src/Types.elm --type Msg Increment
+elmq refs src/Types.elm Increment
 ```
 
 ```
@@ -342,7 +344,9 @@ src/Debug.elm
         debugMsg m = m == Increment 0
 ```
 
-Read-only discovery command. Walks the entire project and classifies every reference to a given constructor by its syntactic role: `case-branch` and `case-wildcard-covered` are "clean" (what `variant rm` would rewrite); `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, and `expression-position` are "blocking" (what `variant rm` would leave for the agent). Use it to audit whether a constructor is still needed, to plan a rename, or to understand the blast radius of a type change — independent of any removal flow. `--format json` emits `total_sites`, `total_clean`, `total_blocking`, and a flat `sites` array with `file`, `line`, `column`, `declaration`, `kind`, and `snippet` per entry.
+Walks the entire project and classifies every reference by its syntactic role: `case-branch` and `case-wildcard-covered` are "clean" (what `variant rm` would rewrite); `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, and `expression-position` are "blocking" (what `variant rm` would leave for the agent). Use it to audit whether a constructor is still needed, to plan a rename, or to understand the blast radius of a type change — independent of any removal flow. `--format json` emits `total_sites`, `total_clean`, `total_blocking`, and a flat `sites` array with `file`, `line`, `column`, `declaration`, `kind`, and `snippet` per entry.
+
+Decl and constructor names can be mixed in a single `elmq refs` call; each is framed under its own `## <arg>` header.
 
 ### Search Elm sources
 

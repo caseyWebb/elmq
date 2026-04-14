@@ -1941,19 +1941,17 @@ type Msg
     );
 }
 
-fn refs_json(root: &Path, type_file: &str, type_name: &str, ctor: &str) -> serde_json::Value {
+fn refs_json(root: &Path, type_file: &str, _type_name: &str, ctor: &str) -> serde_json::Value {
     let output = elmq()
         .current_dir(root)
-        .args([
-            "variant", "refs", type_file, "--type", type_name, ctor, "--format", "json",
-        ])
+        .args(["refs", type_file, ctor, "--format", "json"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "variant refs failed. stderr: {stderr}\nstdout: {stdout}"
+        "refs failed. stderr: {stderr}\nstdout: {stdout}"
     );
     serde_json::from_str(&stdout).expect("refs output must be valid JSON")
 }
@@ -2340,7 +2338,10 @@ start =
 }
 
 #[test]
-fn refs_constructor_not_found_errors() {
+fn refs_unknown_name_errors_as_declaration_not_found() {
+    // Under the unified `elmq refs` dispatcher, a name that is neither a
+    // top-level declaration nor a constructor of a type declared in the
+    // target file produces the decl-path error.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     create_project(root, &["src"]);
@@ -2348,53 +2349,65 @@ fn refs_constructor_not_found_errors() {
 
     let output = elmq()
         .current_dir(root)
-        .args([
-            "variant",
-            "refs",
-            "src/Types.elm",
-            "--type",
-            "Msg",
-            "DoesNotExist",
-        ])
+        .args(["refs", "src/Types.elm", "DoesNotExist"])
         .output()
         .unwrap();
-    assert!(!output.status.success());
+    // Multi-arg refs emits per-arg errors via stdout and exits 2; with a
+    // single arg that fails, the error appears in the framed output.
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("not found"),
-        "expected 'not found' in stderr: {stderr}"
+        stdout.contains("declaration 'DoesNotExist' not found")
+            || stderr.contains("declaration 'DoesNotExist' not found"),
+        "expected missing-decl error. stdout: {stdout}\nstderr: {stderr}"
     );
 }
 
 #[test]
-fn refs_type_not_found_errors() {
+fn refs_constructor_in_different_file_falls_through_to_missing() {
+    // `Red` is a constructor of `Color` declared in `src/Colors.elm`.
+    // When the user passes the wrong file (`src/Types.elm`), the
+    // constructor is not in that file's scope, so the dispatcher falls
+    // through to the decl path — which also has no match — and reports
+    // the name as a missing declaration. This preserves the current
+    // decl-refs error shape regardless of whether the name happens to
+    // exist as a constructor elsewhere in the project.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     create_project(root, &["src"]);
     write_msg_types(root);
+    write_elm(
+        root,
+        "src/Colors.elm",
+        "\
+module Colors exposing (Color(..))
+
+type Color
+    = Red
+    | Green
+",
+    );
 
     let output = elmq()
         .current_dir(root)
-        .args([
-            "variant",
-            "refs",
-            "src/Types.elm",
-            "--type",
-            "NoSuchType",
-            "Increment",
-        ])
+        .args(["refs", "src/Types.elm", "Red"])
         .output()
         .unwrap();
-    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("NoSuchType") && stderr.contains("not found"),
-        "expected type-not-found error: {stderr}"
+        stdout.contains("declaration 'Red' not found")
+            || stderr.contains("declaration 'Red' not found"),
+        "expected missing-decl error. stdout: {stdout}\nstderr: {stderr}"
     );
 }
 
 #[test]
-fn refs_constructor_wrong_type_errors() {
+fn refs_constructor_in_same_file_as_other_type_resolves() {
+    // `Red` is a constructor of `Color` and both `Msg` and `Color` are
+    // declared in `src/Types.elm`. Under the unified dispatcher, the
+    // owning type is auto-resolved, so asking for refs to `Red` works
+    // without a `--type` disambiguator.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     create_project(root, &["src"]);
@@ -2413,18 +2426,24 @@ type Color
     | Green
 ",
     );
+    write_elm(
+        root,
+        "src/Palette.elm",
+        "\
+module Palette exposing (..)
 
-    let output = elmq()
-        .current_dir(root)
-        .args(["variant", "refs", "src/Types.elm", "--type", "Msg", "Red"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Color") && stderr.contains("belongs to"),
-        "expected belongs-to error: {stderr}"
+import Types exposing (Color(..))
+
+primary : Color
+primary =
+    Red
+",
     );
+
+    let refs = refs_json(root, "src/Types.elm", "Color", "Red");
+    assert_eq!(refs["type_name"], "Color");
+    assert_eq!(refs["total_sites"], 1);
+    assert_eq!(site_kinds(&refs), vec!["expression-position".to_string()]);
 }
 
 // -- variant rm: advisory integration --

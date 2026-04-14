@@ -2117,65 +2117,67 @@ pub fn execute_rm_variant(
     })
 }
 
+/// Probe whether `name` is a constructor of a custom type declared in `file`.
+/// Returns `Some((target_module, type_name))` if so, `None` otherwise. Used by
+/// the top-level `elmq refs` dispatcher to decide whether to route a name
+/// through the constructor classifier or through the decl-based refs path.
+/// Errors only on project/IO/parse failures — an unknown name is `Ok(None)`,
+/// and a name that belongs to a type in another file is also `Ok(None)` so
+/// the caller can fall through to the decl path without leaking the
+/// constructor-map's view of the project.
+pub fn resolve_constructor_in_file(file: &Path, name: &str) -> Result<Option<(String, String)>> {
+    let project = Project::discover(file)?;
+    let target_module = project.module_name(file)?;
+    let elm_files = project.elm_files()?;
+    let constructor_map = build_constructor_map(&project, &elm_files)?;
+
+    match constructor_map.get(name) {
+        Some(type_info) if type_info.module == target_module => Ok(Some((
+            type_info.module.clone(),
+            type_info.type_name.clone(),
+        ))),
+        _ => Ok(None),
+    }
+}
+
 /// Read-only: collect every project-wide reference to a given constructor,
 /// grouped by file, with classification (case branch, expression position,
-/// refutable-pattern position, etc.). The discovery/audit counterpart to
-/// `execute_rm_variant`'s advisory list — useful on its own but not part of
-/// the rm loop.
-pub fn execute_variant_refs(
-    file: &Path,
-    type_name: &str,
-    constructor_name: &str,
-) -> Result<RefsResult> {
+/// refutable-pattern position, etc.). Invoked by the top-level `elmq refs`
+/// dispatcher when a name is detected as a constructor of a type declared in
+/// the target file.
+///
+/// The owning type is auto-resolved via the project's constructor map. The
+/// constructor must belong to a type declared in `file`; otherwise the error
+/// message points to the actual owning module.type so the caller can retry
+/// against the correct file.
+pub fn execute_refs_for_constructor(file: &Path, constructor_name: &str) -> Result<RefsResult> {
     let project = Project::discover(file)?;
     let target_module = project.module_name(file)?;
     let elm_files = project.elm_files()?;
     let type_file_display = relative_display(file, &project.root);
 
-    // Validate: the target type must exist in the given file.
-    let source = std::fs::read_to_string(file)
-        .with_context(|| format!("could not read {}", file.display()))?;
-    let tree = parser::parse(&source)?;
-    {
-        let root = tree.root_node();
-        let mut cursor = root.walk();
-        let mut found = false;
-        for child in root.named_children(&mut cursor) {
-            if child.kind() == "type_declaration"
-                && let Some(name_node) = child.child_by_field_name("name")
-                && let Ok(name) = name_node.utf8_text(source.as_bytes())
-                && name == type_name
-            {
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            bail!("type {type_name} not found in {}", file.display());
-        }
-    }
-
     let constructor_map = build_constructor_map(&project, &elm_files)?;
 
-    // Validate: the constructor must exist and belong to the given type.
-    match constructor_map.get(constructor_name) {
+    let type_name = match constructor_map.get(constructor_name) {
         Some(type_info) => {
-            if type_info.module != target_module || type_info.type_name != type_name {
+            if type_info.module != target_module {
                 bail!(
-                    "constructor {constructor_name} belongs to {}.{}, not {target_module}.{type_name}",
+                    "constructor {constructor_name} belongs to {}.{}, not a type declared in {}",
                     type_info.module,
-                    type_info.type_name
+                    type_info.type_name,
+                    file.display()
                 );
             }
+            type_info.type_name.clone()
         }
         None => bail!("constructor {constructor_name} not found"),
-    }
+    };
 
     let sites = collect_constructor_sites(
         &project,
         &elm_files,
         &target_module,
-        type_name,
+        &type_name,
         constructor_name,
         &constructor_map,
     )?;
@@ -2200,7 +2202,7 @@ pub fn execute_variant_refs(
 
     Ok(RefsResult {
         type_file: type_file_display,
-        type_name: type_name.to_string(),
+        type_name,
         constructor: constructor_name.to_string(),
         total_sites,
         total_clean,

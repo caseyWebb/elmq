@@ -419,27 +419,6 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
                 }
                 Ok(0)
             }
-            VariantCommand::Refs {
-                file,
-                type_name,
-                constructor,
-                format,
-            } => {
-                let canonical = file
-                    .canonicalize()
-                    .with_context(|| format!("file not found: {}", file.display()))?;
-
-                let result =
-                    elmq::variant::execute_variant_refs(&canonical, &type_name, &constructor)?;
-
-                match format {
-                    Format::Compact => render_refs_compact(&result),
-                    Format::Json => {
-                        println!("{}", serde_json::to_string_pretty(&result)?);
-                    }
-                }
-                Ok(0)
-            }
             VariantCommand::Rm {
                 file,
                 type_name,
@@ -486,42 +465,6 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
                 Ok(0)
             }
         },
-    }
-}
-
-// ---------------- variant refs (compact renderer) ----------------
-
-/// Render a `RefsResult` as compact output: a one-line headline with clean vs.
-/// blocking counts, then per-file sections listing each site with file:line,
-/// enclosing declaration, classification, and a snippet. Format matches
-/// `openspec/changes/variant-refs/design.md` §7.
-fn render_refs_compact(result: &elmq::variant::RefsResult) {
-    if result.total_sites == 0 {
-        println!("{}.{} — 0 references", result.type_name, result.constructor);
-        return;
-    }
-
-    println!(
-        "{}.{} — {} reference{} ({} clean, {} blocking)",
-        result.type_name,
-        result.constructor,
-        result.total_sites,
-        if result.total_sites == 1 { "" } else { "s" },
-        result.total_clean,
-        result.total_blocking,
-    );
-
-    for (file, sites) in &result.sites_by_file {
-        println!("{file}");
-        for site in sites {
-            println!(
-                "  {:>4}  {:<14}  {}",
-                site.line, site.declaration, site.kind,
-            );
-            if !site.snippet.is_empty() {
-                println!("        {}", site.snippet);
-            }
-        }
     }
 }
 
@@ -1065,38 +1008,52 @@ fn run_refs(file: PathBuf, names: Vec<String>, format: Format) -> Result<i32> {
         return Ok(0);
     }
 
-    // Load the file summary to validate that each name exists as a
-    // top-level declaration in the target file. Unknown names are reported
-    // as per-arg errors and skipped from the batch call.
+    // Each name dispatches independently: constructors of a custom type
+    // declared in this file go through the classifier
+    // (`execute_refs_for_constructor`), top-level declarations go through
+    // the batch decl-ref path, unknown names are reported as per-arg errors.
+    // We classify every name up front so the decl subset can be batched in
+    // a single project walk (preserving `find_refs_batch`'s parse-once
+    // performance property).
     let (_, summary) = load_and_parse(&canonical)?;
-    let mut known_names: Vec<&str> = Vec::with_capacity(names.len());
-    let mut name_index: Vec<Option<usize>> = Vec::with_capacity(names.len());
+
+    enum Kind {
+        Decl(usize),                            // index into `decl_names`
+        Constructor(elmq::variant::RefsResult), // resolved eagerly — single-name walks are cheap enough
+        Missing,
+    }
+    let mut decl_names: Vec<&str> = Vec::new();
+    let mut kinds: Vec<Kind> = Vec::with_capacity(names.len());
     for name in &names {
         if summary.find_declaration(name).is_some() {
-            name_index.push(Some(known_names.len()));
-            known_names.push(name.as_str());
+            kinds.push(Kind::Decl(decl_names.len()));
+            decl_names.push(name.as_str());
+        } else if let Some((_, _)) = elmq::variant::resolve_constructor_in_file(&canonical, name)? {
+            let result = elmq::variant::execute_refs_for_constructor(&canonical, name)?;
+            kinds.push(Kind::Constructor(result));
         } else {
-            name_index.push(None);
+            kinds.push(Kind::Missing);
         }
     }
 
-    let batch_matches = if known_names.is_empty() {
+    let batch_matches = if decl_names.is_empty() {
         Vec::new()
     } else {
-        refs::find_refs_batch(&project, &target_module, &known_names)?
+        refs::find_refs_batch(&project, &target_module, &decl_names)?
     };
 
     let entries: Vec<(String, ItemResult)> = names
         .iter()
-        .zip(name_index.iter())
-        .map(|(name, idx)| {
+        .zip(kinds)
+        .map(|(name, kind)| {
             let arg = name.clone();
-            let result: ItemResult = match idx {
-                Some(i) => {
-                    let matches = &batch_matches[*i];
+            let result: ItemResult = match kind {
+                Kind::Decl(i) => {
+                    let matches = &batch_matches[i];
                     Ok(format_refs_body(matches, &format))
                 }
-                None => Err(format!("declaration '{name}' not found")),
+                Kind::Constructor(r) => Ok(format_constructor_refs_body(&r, &format)),
+                Kind::Missing => Err(format!("declaration '{name}' not found")),
             };
             (arg, result)
         })
@@ -1105,6 +1062,45 @@ fn run_refs(file: PathBuf, names: Vec<String>, format: Format) -> Result<i32> {
     let (out, code) = format_results(&entries);
     print!("{out}");
     Ok(code)
+}
+
+/// Render a classified constructor `RefsResult` into the same framed string
+/// shape that `format_refs_body` produces for decl refs, so multi-arg `refs`
+/// output can mix both kinds inside the standard `## <arg>` header frames.
+fn format_constructor_refs_body(result: &elmq::variant::RefsResult, format: &Format) -> String {
+    match format {
+        Format::Compact => {
+            let mut out = String::new();
+            let _ = writeln!(
+                out,
+                "{}.{} — {} reference{} ({} clean, {} blocking)",
+                result.type_name,
+                result.constructor,
+                result.total_sites,
+                if result.total_sites == 1 { "" } else { "s" },
+                result.total_clean,
+                result.total_blocking,
+            );
+            for (file, sites) in &result.sites_by_file {
+                let _ = writeln!(out, "{file}");
+                for site in sites {
+                    let _ = writeln!(
+                        out,
+                        "  {:>4}  {:<14}  {}",
+                        site.line, site.declaration, site.kind,
+                    );
+                    if !site.snippet.is_empty() {
+                        let _ = writeln!(out, "        {}", site.snippet);
+                    }
+                }
+            }
+            out
+        }
+        Format::Json => match serde_json::to_string_pretty(result) {
+            Ok(s) => format!("{s}\n"),
+            Err(_) => String::new(),
+        },
+    }
 }
 
 fn print_refs_compact(matches: &[refs::RefMatch], format: Format) {
