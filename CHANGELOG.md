@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.0 (2026-04-14)
+
+## What's Changed
+* fix: include README and LICENSE in release artifacts by @caseyWebb in https://github.com/caseyWebb/elmq/pull/74
+* feat(refs): constructor-aware refs dispatch + variant rm advisory classifier by @caseyWebb in https://github.com/caseyWebb/elmq/pull/76
+* feat!: reject invalid Elm edits via tree-sitter gates by @caseyWebb in https://github.com/caseyWebb/elmq/pull/77
+* docs: add HYPOTHESIS.md stating the elmq experiment by @caseyWebb in https://github.com/caseyWebb/elmq/pull/78
+* feat!: restructure edit surface to verb-first <scope> by @caseyWebb in https://github.com/caseyWebb/elmq/pull/79
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.7.4...v0.8.0
+
 ## 0.7.4 (2026-04-13)
 
 ## What's Changed
