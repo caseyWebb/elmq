@@ -419,6 +419,27 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
                 }
                 Ok(0)
             }
+            VariantCommand::Refs {
+                file,
+                type_name,
+                constructor,
+                format,
+            } => {
+                let canonical = file
+                    .canonicalize()
+                    .with_context(|| format!("file not found: {}", file.display()))?;
+
+                let result =
+                    elmq::variant::execute_variant_refs(&canonical, &type_name, &constructor)?;
+
+                match format {
+                    Format::Compact => render_refs_compact(&result),
+                    Format::Json => {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    }
+                }
+                Ok(0)
+            }
             VariantCommand::Rm {
                 file,
                 type_name,
@@ -456,6 +477,7 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
                                 skip.file, skip.line, skip.function, skip.reason
                             );
                         }
+                        render_rm_advisory(&result.references_not_rewritten);
                     }
                     Format::Json => {
                         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -465,6 +487,65 @@ fn run_command(cli: Cli, file_groups: Vec<(PathBuf, Vec<String>)>) -> Result<i32
             }
         },
     }
+}
+
+// ---------------- variant refs (compact renderer) ----------------
+
+/// Render a `RefsResult` as compact output: a one-line headline with clean vs.
+/// blocking counts, then per-file sections listing each site with file:line,
+/// enclosing declaration, classification, and a snippet. Format matches
+/// `openspec/changes/variant-refs/design.md` §7.
+fn render_refs_compact(result: &elmq::variant::RefsResult) {
+    if result.total_sites == 0 {
+        println!("{}.{} — 0 references", result.type_name, result.constructor);
+        return;
+    }
+
+    println!(
+        "{}.{} — {} reference{} ({} clean, {} blocking)",
+        result.type_name,
+        result.constructor,
+        result.total_sites,
+        if result.total_sites == 1 { "" } else { "s" },
+        result.total_clean,
+        result.total_blocking,
+    );
+
+    for (file, sites) in &result.sites_by_file {
+        println!("{file}");
+        for site in sites {
+            println!(
+                "  {:>4}  {:<14}  {}",
+                site.line, site.declaration, site.kind,
+            );
+            if !site.snippet.is_empty() {
+                println!("        {}", site.snippet);
+            }
+        }
+    }
+}
+
+/// Render the `references not rewritten` advisory block under a `variant rm`
+/// compact output. Omitted entirely when the list is empty so happy-path
+/// output is unchanged. Every blocking site gets file, line, enclosing
+/// declaration, classification, and a one-line snippet; the block closes
+/// with an `elm make` hint so the agent knows what to do next.
+fn render_rm_advisory(refs: &[elmq::variant::ConstructorSiteReport]) {
+    if refs.is_empty() {
+        return;
+    }
+    println!();
+    println!("references not rewritten ({}):", refs.len());
+    for site in refs {
+        println!(
+            "  {}:{}  {}  {}",
+            site.file, site.line, site.declaration, site.kind
+        );
+        if !site.snippet.is_empty() {
+            println!("      {}", site.snippet);
+        }
+    }
+    println!("  run `elm make` to confirm and fix these before continuing");
 }
 
 // ---------------- variant cases (compact renderer) ----------------

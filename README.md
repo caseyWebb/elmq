@@ -305,7 +305,44 @@ removed Decrement from Msg in src/Types.elm
   src/View.elm:15    label   — removed branch
 ```
 
-Removes a constructor and its matching branches from all case expressions. Errors if removing the last variant (use `elmq rm` instead). Use `--dry-run` to preview changes.
+Removes a constructor and its matching branches from all case expressions — including nested patterns like `Just Decrement -> ...`. Errors if removing the last variant (use `elmq rm` instead). Use `--dry-run` to preview changes.
+
+When the constructor is also used outside case branches (expression position, refutable patterns in function/lambda/let arguments), `variant rm` emits a `references not rewritten` advisory section listing every such site with its file, line, enclosing declaration, and classification so the agent can fix them by hand before running `elm make`:
+
+```
+removed Increment from Msg in src/Types.elm
+  src/Update.elm:47  update  — removed branch
+
+references not rewritten (2):
+  src/Init.elm:15  init      expression-position
+      init = ( Model 0, Cmd.map Wrap (Increment 1) )
+  src/Debug.elm:8  debugMsg  expression-position
+      debugMsg m = m == Increment 0
+  run `elm make` to confirm and fix these before continuing
+```
+
+The advisory is the *same data* surfaced by `variant refs` (see below), included in the rm output so the removal loop is one or two `elmq` touches at most — don't chain `variant refs` into the rm flow.
+
+### Audit constructor references
+
+```sh
+elmq variant refs src/Types.elm --type Msg Increment
+```
+
+```
+Msg.Increment — 3 references (1 clean, 2 blocking)
+src/Update.elm
+    47  update       case-branch
+        Increment ->
+src/Init.elm
+    15  init         expression-position
+        init = ( Model 0, Cmd.map Wrap (Increment 1) )
+src/Debug.elm
+     8  debugMsg     expression-position
+        debugMsg m = m == Increment 0
+```
+
+Read-only discovery command. Walks the entire project and classifies every reference to a given constructor by its syntactic role: `case-branch` and `case-wildcard-covered` are "clean" (what `variant rm` would rewrite); `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, and `expression-position` are "blocking" (what `variant rm` would leave for the agent). Use it to audit whether a constructor is still needed, to plan a rename, or to understand the blast radius of a type change — independent of any removal flow. `--format json` emits `total_sites`, `total_clean`, `total_blocking`, and a flat `sites` array with `file`, `line`, `column`, `declaration`, `kind`, and `snippet` per entry.
 
 ### Search Elm sources
 

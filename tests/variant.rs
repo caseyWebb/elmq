@@ -1915,3 +1915,781 @@ step msg model =
         "tuple fill should be inserted verbatim: {main}"
     );
 }
+
+// =========================================================================
+// variant refs: classifier coverage + rm advisory
+// =========================================================================
+//
+// These tests exercise the shared `collect_constructor_sites` walker through
+// the two surfaces that consume it: `variant refs` (read-only projection) and
+// `variant rm` (advisory list in the mutation output). Every `SiteKind`
+// category has its own fixture so a future grammar or classifier change that
+// breaks categorization surfaces immediately instead of silently mis-tagging.
+
+fn write_msg_types(root: &Path) {
+    write_elm(
+        root,
+        "src/Types.elm",
+        "\
+module Types exposing (Msg(..))
+
+type Msg
+    = Increment
+    | Decrement
+    | Reset
+",
+    );
+}
+
+fn refs_json(root: &Path, type_file: &str, type_name: &str, ctor: &str) -> serde_json::Value {
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "variant", "refs", type_file, "--type", type_name, ctor, "--format", "json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "variant refs failed. stderr: {stderr}\nstdout: {stdout}"
+    );
+    serde_json::from_str(&stdout).expect("refs output must be valid JSON")
+}
+
+fn site_kinds(v: &serde_json::Value) -> Vec<String> {
+    v["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["kind"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn refs_case_branch_direct() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+update : Msg -> Int -> Int
+update msg n =
+    case msg of
+        Increment ->
+            n + 1
+
+        Decrement ->
+            n - 1
+
+        Reset ->
+            0
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(refs["total_sites"], 1);
+    assert_eq!(refs["total_clean"], 1);
+    assert_eq!(refs["total_blocking"], 0);
+    assert_eq!(site_kinds(&refs), vec!["case-branch".to_string()]);
+}
+
+#[test]
+fn refs_case_branch_nested_tuple() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+pair : ( Msg, Int ) -> Int
+pair p =
+    case p of
+        ( Increment, n ) ->
+            n + 1
+
+        ( Decrement, n ) ->
+            n - 1
+
+        ( Reset, _ ) ->
+            0
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(site_kinds(&refs), vec!["case-branch".to_string()]);
+}
+
+#[test]
+fn refs_case_branch_nested_union_pattern_bug_fix() {
+    // Regression: `case x of Just Increment -> ...` must be classified as a
+    // case-branch site. Today's `find_constructor_in_pattern` misses nested
+    // `union_pattern`s; the shared walker must not.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+unwrap : Maybe Msg -> Int
+unwrap m =
+    case m of
+        Just Increment ->
+            1
+
+        Just Decrement ->
+            -1
+
+        _ ->
+            0
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(refs["total_sites"], 1);
+    assert_eq!(site_kinds(&refs), vec!["case-branch".to_string()]);
+}
+
+#[test]
+fn refs_case_wildcard_covered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+view : Msg -> String
+view msg =
+    case msg of
+        Decrement ->
+            \"dec\"
+
+        _ ->
+            \"other\"
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(refs["total_sites"], 1);
+    assert_eq!(site_kinds(&refs), vec!["case-wildcard-covered".to_string()]);
+    assert_eq!(refs["total_clean"], 1);
+    assert_eq!(refs["total_blocking"], 0);
+}
+
+#[test]
+fn refs_function_arg_pattern() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+handler : Msg -> Bool
+handler (Increment) =
+    True
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(site_kinds(&refs), vec!["function-arg-pattern".to_string()]);
+    assert_eq!(refs["total_blocking"], 1);
+}
+
+#[test]
+fn refs_lambda_arg_pattern() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+go : Msg -> Int
+go =
+    \\(Increment) -> 1
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(site_kinds(&refs), vec!["lambda-arg-pattern".to_string()]);
+}
+
+#[test]
+fn refs_let_binding_pattern() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    // A top-level value_declaration with a pattern field (not
+    // functionDeclarationLeft) is the idiomatic way to exercise the
+    // LetBindingPattern classification in Elm.
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+firstMsg : Msg
+firstMsg =
+    Decrement
+
+(Increment) =
+    firstMsg
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    // Depending on how tree-sitter-elm parses the top-level pattern binding,
+    // this may classify as let-binding-pattern or function-arg-pattern. Both
+    // are "blocking" — what matters is that the site is detected and classified
+    // as a refutable pattern, not as an expression.
+    let kinds = site_kinds(&refs);
+    assert_eq!(kinds.len(), 1, "expected exactly one site, got {kinds:?}");
+    let k = &kinds[0];
+    assert!(
+        k == "let-binding-pattern" || k == "function-arg-pattern",
+        "unexpected classification for top-level refutable pattern: {k}"
+    );
+    assert_eq!(refs["total_blocking"], 1);
+}
+
+#[test]
+fn refs_expression_position_construction() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+start : Msg
+start =
+    Increment
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(site_kinds(&refs), vec!["expression-position".to_string()]);
+}
+
+#[test]
+fn refs_expression_position_partial_application() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Types.elm",
+        "\
+module Types exposing (Msg(..))
+
+type Msg
+    = Wrap Int
+    | Keep
+",
+    );
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+wraps : List Msg
+wraps =
+    List.map Wrap [ 1, 2, 3 ]
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Wrap");
+    assert_eq!(site_kinds(&refs), vec!["expression-position".to_string()]);
+}
+
+#[test]
+fn refs_expression_position_equality() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+isInc : Msg -> Bool
+isInc m =
+    m == Increment
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(site_kinds(&refs), vec!["expression-position".to_string()]);
+}
+
+#[test]
+fn refs_skips_constructor_own_definition() {
+    // The target constructor appears in its own `type` declaration. The walker
+    // must not report that as a reference to itself — otherwise `variant refs`
+    // would always report at least one bogus site for every constructor.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    // With no other files in the project, there should be no references.
+    assert_eq!(refs["total_sites"], 0);
+}
+
+#[test]
+fn refs_multi_file_grouping() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Update.elm",
+        "\
+module Update exposing (..)
+
+import Types exposing (Msg(..))
+
+update : Msg -> Int -> Int
+update msg n =
+    case msg of
+        Increment ->
+            n + 1
+
+        Decrement ->
+            n - 1
+
+        Reset ->
+            0
+",
+    );
+    write_elm(
+        root,
+        "src/Init.elm",
+        "\
+module Init exposing (..)
+
+import Types exposing (Msg(..))
+
+start : Msg
+start =
+    Increment
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(refs["total_sites"], 2);
+    assert_eq!(refs["total_clean"], 1);
+    assert_eq!(refs["total_blocking"], 1);
+    let kinds = site_kinds(&refs);
+    assert!(kinds.contains(&"case-branch".to_string()));
+    assert!(kinds.contains(&"expression-position".to_string()));
+}
+
+#[test]
+fn refs_constructor_not_found_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "variant",
+            "refs",
+            "src/Types.elm",
+            "--type",
+            "Msg",
+            "DoesNotExist",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not found"),
+        "expected 'not found' in stderr: {stderr}"
+    );
+}
+
+#[test]
+fn refs_type_not_found_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "variant",
+            "refs",
+            "src/Types.elm",
+            "--type",
+            "NoSuchType",
+            "Increment",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("NoSuchType") && stderr.contains("not found"),
+        "expected type-not-found error: {stderr}"
+    );
+}
+
+#[test]
+fn refs_constructor_wrong_type_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_elm(
+        root,
+        "src/Types.elm",
+        "\
+module Types exposing (Msg(..), Color(..))
+
+type Msg
+    = Increment
+    | Decrement
+
+type Color
+    = Red
+    | Green
+",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args(["variant", "refs", "src/Types.elm", "--type", "Msg", "Red"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Color") && stderr.contains("belongs to"),
+        "expected belongs-to error: {stderr}"
+    );
+}
+
+// -- variant rm: advisory integration --
+
+#[test]
+fn rm_variant_advisory_lists_blocking_sites() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+update : Msg -> Int -> Int
+update msg n =
+    case msg of
+        Increment ->
+            n + 1
+
+        Decrement ->
+            n - 1
+
+        Reset ->
+            0
+
+start : Msg
+start =
+    Increment
+",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "variant",
+            "rm",
+            "src/Types.elm",
+            "--type",
+            "Msg",
+            "Increment",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("rm output must be JSON");
+    let refs = v["references_not_rewritten"].as_array().expect("advisory");
+    assert_eq!(refs.len(), 1, "expected one blocking site: {v}");
+    assert_eq!(refs[0]["kind"], "expression-position");
+    assert_eq!(refs[0]["declaration"], "start");
+
+    // Type file is still written with the variant removed.
+    let types = read_elm(root, "src/Types.elm");
+    assert!(!types.contains("= Increment"));
+    assert!(!types.contains("| Increment"));
+}
+
+#[test]
+fn rm_variant_advisory_empty_when_clean_only() {
+    // When every reference is a cleanly-removable case branch, the advisory
+    // list must be empty — no regression on happy-path rm output.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+update msg n =
+    case msg of
+        Increment ->
+            n + 1
+
+        Decrement ->
+            n - 1
+
+        Reset ->
+            0
+",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "variant",
+            "rm",
+            "src/Types.elm",
+            "--type",
+            "Msg",
+            "Reset",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    // skip_serializing_if = "Vec::is_empty" means the field is absent when empty.
+    assert!(
+        v.get("references_not_rewritten").is_none()
+            || v["references_not_rewritten"].as_array().unwrap().is_empty(),
+        "expected empty advisory, got: {v}"
+    );
+}
+
+#[test]
+fn rm_variant_advisory_compact_section_emitted() {
+    // The compact renderer should include a "references not rewritten" header
+    // and the `elm make` hint when blocking sites exist.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+go : Msg
+go =
+    Increment
+",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "variant",
+            "rm",
+            "src/Types.elm",
+            "--type",
+            "Msg",
+            "Increment",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "stdout: {stdout}");
+    assert!(
+        stdout.contains("references not rewritten (1)"),
+        "compact output missing advisory header: {stdout}"
+    );
+    assert!(
+        stdout.contains("expression-position"),
+        "compact output missing classification: {stdout}"
+    );
+    assert!(
+        stdout.contains("elm make"),
+        "compact output missing elm make hint: {stdout}"
+    );
+}
+
+#[test]
+fn rm_variant_removes_nested_just_increment_branch() {
+    // Regression for the nested `union_pattern` bug: today's code would leave
+    // `Just Increment ->` behind. After the fix, the walker detects it and
+    // the branch-removal loop takes it out.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+unwrap : Maybe Msg -> Int
+unwrap m =
+    case m of
+        Just Increment ->
+            1
+
+        Just Decrement ->
+            -1
+
+        _ ->
+            0
+",
+    );
+
+    let output = elmq()
+        .current_dir(root)
+        .args([
+            "variant",
+            "rm",
+            "src/Types.elm",
+            "--type",
+            "Msg",
+            "Increment",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "stderr: {stderr}\nstdout: {stdout}"
+    );
+
+    let main_content = read_elm(root, "src/Main.elm");
+    assert!(
+        !main_content.contains("Just Increment"),
+        "nested Just Increment branch should have been removed: {main_content}"
+    );
+    // Decrement branch should still be there.
+    assert!(
+        main_content.contains("Just Decrement"),
+        "Decrement branch should be intact: {main_content}"
+    );
+}
+
+#[test]
+fn refs_ignores_unrelated_constructors() {
+    // A separate type with its own `Increment` constructor in an unrelated
+    // module must not show up when asking for references to `Types.Msg.Increment`.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root);
+    write_elm(
+        root,
+        "src/Other.elm",
+        "\
+module Other exposing (..)
+
+type Counter
+    = Increment
+    | Reset
+
+go : Counter
+go =
+    Increment
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    // Only references to Types.Msg.Increment should be counted — there are
+    // none in this project; `Other.Counter.Increment` is a different symbol.
+    assert_eq!(
+        refs["total_sites"], 0,
+        "unrelated constructor must not be reported: {refs}"
+    );
+}

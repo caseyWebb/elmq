@@ -18,6 +18,49 @@ pub struct VariantResult {
     pub variant_name: String,
     pub edits: Vec<CaseEdit>,
     pub skipped: Vec<CaseSkip>,
+    /// Every project-wide reference to the removed constructor that `variant rm`
+    /// did NOT rewrite — expression-position uses, refutable patterns in function
+    /// or lambda arguments, let-binding patterns, etc. Populated only by
+    /// `execute_rm_variant`; empty for `execute_add_variant`. Advisory, not a
+    /// gate: `variant rm` still writes its files even when this is non-empty,
+    /// and the agent is expected to fix these by hand before running `elm make`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references_not_rewritten: Vec<ConstructorSiteReport>,
+}
+
+/// Public JSON-serializable view of a constructor reference site. Used by both
+/// `variant refs` output and the `references_not_rewritten` field of
+/// `VariantResult`. `kind` is one of `case-branch`, `case-wildcard-covered`,
+/// `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, or
+/// `expression-position` — the same strings documented in
+/// `openspec/changes/variant-refs/design.md` §7.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConstructorSiteReport {
+    pub file: String,
+    pub module: String,
+    pub declaration: String,
+    pub line: usize,
+    pub column: usize,
+    pub kind: String,
+    pub snippet: String,
+}
+
+/// Read-only result of `elmq variant refs` — every project-wide reference to a
+/// given constructor, grouped by file, with a summary of clean vs. blocking
+/// counts. Both grouped (`sites_by_file`) and flat (`sites`) views are emitted
+/// so compact output can render per-file sections while JSON consumers can
+/// iterate `sites` directly.
+#[derive(Debug, Clone, Serialize)]
+pub struct RefsResult {
+    pub type_file: String,
+    pub type_name: String,
+    pub constructor: String,
+    pub total_sites: usize,
+    pub total_clean: usize,
+    pub total_blocking: usize,
+    pub sites: Vec<ConstructorSiteReport>,
+    #[serde(skip_serializing)]
+    pub sites_by_file: Vec<(String, Vec<ConstructorSiteReport>)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,8 +241,6 @@ struct CaseExprInfo {
     line: usize,
     /// Enclosing function name
     function: String,
-    /// Whether the case has a wildcard/catch-all branch
-    has_wildcard: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -312,10 +353,47 @@ fn find_constructor_in_pattern(
                     return Some(bare.to_string());
                 }
             }
+            // Nested constructor: the outer `union_pattern` did not match the
+            // target type, but its argument patterns might contain a nested
+            // `union_pattern` that does (e.g. `Just Increment` when removing
+            // `Increment`). Recurse into children so the iterative branch
+            // removal loop in `execute_rm_variant` sees nested references.
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if let Some(found) = find_constructor_in_pattern(&child, source, ctx, import_ctx) {
+                    return Some(found);
+                }
+            }
             None
         }
-        "pattern" | "tuple_pattern" | "cons_pattern" | "list_pattern" => {
-            // Recurse into sub-patterns.
+        "upper_case_qid" => {
+            // Bare constructor reference inside a pattern — e.g. the
+            // `Increment` inside `Just Increment`, which tree-sitter-elm
+            // wraps in `nullary_constructor_argument_pattern` → `upper_case_qid`
+            // (no outer `union_pattern` because the constructor takes no args).
+            if let Ok(ctor_text) = node.utf8_text(source.as_bytes())
+                && let Some(resolved) = resolve_constructor(
+                    ctor_text,
+                    ctx.constructor_map,
+                    import_ctx,
+                    ctx.current_module,
+                )
+                && resolved.0 == ctx.target_module
+                && resolved.1 == ctx.target_type
+            {
+                let bare = ctor_text.rsplit('.').next().unwrap_or(ctor_text);
+                return Some(bare.to_string());
+            }
+            None
+        }
+        "pattern"
+        | "tuple_pattern"
+        | "cons_pattern"
+        | "list_pattern"
+        | "nullary_constructor_argument_pattern" => {
+            // Recurse into sub-patterns. `nullary_constructor_argument_pattern`
+            // is how tree-sitter-elm wraps no-arg constructor arguments like
+            // the `Increment` in `Just Increment`.
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 if let Some(found) = find_constructor_in_pattern(&child, source, ctx, import_ctx) {
@@ -689,6 +767,401 @@ fn collect_case_sites_in_tree(
     }
 }
 
+// -- Constructor-site walker (variant refs + rm advisory) --
+
+/// Internal classification of a single `upper_case_qid` that resolves to the
+/// target constructor. Unit variants — today's rm flow runs its own byte-range
+/// discovery via `find_matching_branch`, so the classifier only needs to tell
+/// the caller which category the site falls into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SiteKind {
+    CaseBranch,
+    CaseWildcardCovered,
+    FunctionArgPattern,
+    LambdaArgPattern,
+    LetBindingPattern,
+    ExpressionPosition,
+}
+
+impl SiteKind {
+    fn kind_str(&self) -> &'static str {
+        match self {
+            SiteKind::CaseBranch => "case-branch",
+            SiteKind::CaseWildcardCovered => "case-wildcard-covered",
+            SiteKind::FunctionArgPattern => "function-arg-pattern",
+            SiteKind::LambdaArgPattern => "lambda-arg-pattern",
+            SiteKind::LetBindingPattern => "let-binding-pattern",
+            SiteKind::ExpressionPosition => "expression-position",
+        }
+    }
+
+    fn is_clean_removal(&self) -> bool {
+        matches!(self, SiteKind::CaseBranch | SiteKind::CaseWildcardCovered)
+    }
+}
+
+/// Full internal record of a constructor reference site. Rendered down to
+/// `ConstructorSiteReport` for public output.
+#[derive(Debug, Clone)]
+struct ConstructorSite {
+    display: String,
+    module: String,
+    declaration: String,
+    line: usize,
+    column: usize,
+    snippet: String,
+    classification: SiteKind,
+}
+
+impl ConstructorSite {
+    fn into_report(self) -> ConstructorSiteReport {
+        ConstructorSiteReport {
+            file: self.display,
+            module: self.module,
+            declaration: self.declaration,
+            line: self.line,
+            column: self.column,
+            kind: self.classification.kind_str().to_string(),
+            snippet: self.snippet,
+        }
+    }
+}
+
+/// Classifier context carried down the tree as the walker descends. Transitions
+/// at field boundaries (pattern vs. expression body) reset or establish the
+/// enclosing pattern kind. `Unknown` collapses to `ExpressionPosition` at the
+/// leaf; `TypeDeclaration` causes qids to be skipped entirely (so the target
+/// constructor's own definition is not reported as a reference to itself).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClassifyCtx {
+    Unknown,
+    CaseBranchPattern,
+    FunctionArgPattern,
+    LambdaArgPattern,
+    LetBindingPattern,
+    TypeDeclaration,
+}
+
+/// Compute the classifier context for a child node given its parent kind and
+/// the field name it occupies. Pattern-hosting fields (`case_of_branch.pattern`,
+/// `function_declaration_left.pattern`, `anonymous_function_expr.param`,
+/// `value_declaration.pattern`) set the corresponding pattern ctx; expression
+/// body fields reset to `Unknown`; other transitions propagate the parent ctx
+/// unchanged so we stay inside whatever pattern context was previously set.
+fn descend_ctx(parent_kind: &str, field: Option<&str>, parent_ctx: ClassifyCtx) -> ClassifyCtx {
+    if parent_ctx == ClassifyCtx::TypeDeclaration {
+        return ClassifyCtx::TypeDeclaration;
+    }
+    match (parent_kind, field) {
+        ("case_of_branch", Some("pattern")) => ClassifyCtx::CaseBranchPattern,
+        ("case_of_branch", Some("expr")) => ClassifyCtx::Unknown,
+        ("case_of_expr", Some("expr")) => ClassifyCtx::Unknown,
+        ("function_declaration_left", Some("pattern")) => ClassifyCtx::FunctionArgPattern,
+        ("anonymous_function_expr", Some("param")) => ClassifyCtx::LambdaArgPattern,
+        ("anonymous_function_expr", Some("expr")) => ClassifyCtx::Unknown,
+        ("value_declaration", Some("pattern")) => ClassifyCtx::LetBindingPattern,
+        ("value_declaration", Some("body")) => ClassifyCtx::Unknown,
+        ("let_in_expr", Some("body")) => ClassifyCtx::Unknown,
+        _ => parent_ctx,
+    }
+}
+
+/// Return the top-level `value_declaration` enclosing `node`, or `None` if the
+/// node is not inside any top-level declaration.
+fn enclosing_top_level_decl<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    let mut cur = *node;
+    while let Some(p) = cur.parent() {
+        if p.parent().is_none() && cur.kind() == "value_declaration" {
+            return Some(cur);
+        }
+        cur = p;
+    }
+    None
+}
+
+/// Extract the 1-based line containing `byte_offset` as a trimmed snippet,
+/// capped at 200 characters so advisory output stays compact.
+fn line_snippet(source: &str, byte_offset: usize) -> String {
+    let start = source[..byte_offset]
+        .rfind('\n')
+        .map(|p| p + 1)
+        .unwrap_or(0);
+    let end = source[byte_offset..]
+        .find('\n')
+        .map(|p| byte_offset + p)
+        .unwrap_or(source.len());
+    let raw = source[start..end].trim();
+    if raw.len() > 200 {
+        format!("{}…", &raw[..200])
+    } else {
+        raw.to_string()
+    }
+}
+
+/// Walk every `.elm` file in the project and classify every `upper_case_qid`
+/// that resolves to the target constructor. Also emits `CaseWildcardCovered`
+/// sites via a second targeted pass over `case_of_expr` nodes on the target
+/// type. The returned list is ordered by (file, byte offset); rendering groups
+/// by file downstream.
+fn collect_constructor_sites(
+    project: &Project,
+    elm_files: &[PathBuf],
+    target_module: &str,
+    target_type: &str,
+    target_constructor: &str,
+    constructor_map: &HashMap<String, TypeInfo>,
+) -> Result<Vec<ConstructorSite>> {
+    let mut sites: Vec<ConstructorSite> = Vec::new();
+
+    for elm_file in elm_files {
+        let file_source = match std::fs::read_to_string(elm_file) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let tree = match parser::parse(&file_source) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let root = tree.root_node();
+        let import_ctx = ImportContext::from_tree(&root, &file_source);
+        let module_name = match project.module_name(elm_file) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let display = relative_display(elm_file, &project.root);
+        let type_ctx = TypeContext {
+            target_module,
+            target_type,
+            constructor_map,
+            current_module: &module_name,
+        };
+
+        // Pass 1: walk every upper_case_qid, classify by ancestor context.
+        classify_qids(
+            &root,
+            &file_source,
+            ClassifyCtx::Unknown,
+            &type_ctx,
+            &import_ctx,
+            target_constructor,
+            &display,
+            &module_name,
+            &mut sites,
+        );
+
+        // Pass 2: for each case_of_expr that matches the target type but has no
+        // explicit branch for the target constructor AND has a wildcard branch,
+        // emit a `CaseWildcardCovered` site so `variant rm` can surface it in
+        // the skip list and `variant refs` can show it under exploration.
+        collect_wildcard_covered(
+            &root,
+            &file_source,
+            &type_ctx,
+            &import_ctx,
+            target_constructor,
+            &display,
+            &module_name,
+            &mut sites,
+        );
+    }
+
+    // Stable ordering: group by file, then by byte offset. `display` is the
+    // relative path, which makes the grouping intuitive in compact output.
+    sites.sort_by(|a, b| {
+        a.display
+            .cmp(&b.display)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.column.cmp(&b.column))
+    });
+    Ok(sites)
+}
+
+/// Pass 1 of the constructor-site walker: descend the tree, tracking the
+/// classifier context at each field boundary. Whenever we hit an
+/// `upper_case_qid` that resolves to the target constructor (and we are not
+/// inside the target type's own declaration), emit a site classified by the
+/// current context.
+#[allow(clippy::too_many_arguments)]
+fn classify_qids(
+    node: &Node,
+    source: &str,
+    ctx: ClassifyCtx,
+    type_ctx: &TypeContext,
+    import_ctx: &ImportContext,
+    target_constructor: &str,
+    display: &str,
+    module: &str,
+    out: &mut Vec<ConstructorSite>,
+) {
+    // Skip the constructor's own type declaration (and any other type
+    // declarations in the file — constructor names in a `type` definition are
+    // definitions, not references).
+    if node.kind() == "type_declaration" {
+        return;
+    }
+
+    if node.kind() == "upper_case_qid" && ctx != ClassifyCtx::TypeDeclaration {
+        if let Ok(ctor_text) = node.utf8_text(source.as_bytes()) {
+            let bare = ctor_text.rsplit('.').next().unwrap_or(ctor_text);
+            if bare == target_constructor
+                && let Some(resolved) = resolve_constructor(
+                    ctor_text,
+                    type_ctx.constructor_map,
+                    import_ctx,
+                    type_ctx.current_module,
+                )
+                && resolved.0 == type_ctx.target_module
+                && resolved.1 == type_ctx.target_type
+            {
+                let classification = classify_from_ctx(node, ctx);
+                let start = node.start_position();
+                let declaration = enclosing_top_level_decl(node)
+                    .map(|d| {
+                        d.child_by_field_name("functionDeclarationLeft")
+                            .and_then(|fdl| fdl.named_child(0))
+                            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "<unknown>".to_string())
+                    })
+                    .unwrap_or_else(|| "<top-level>".to_string());
+                out.push(ConstructorSite {
+                    display: display.to_string(),
+                    module: module.to_string(),
+                    declaration,
+                    line: start.row + 1,
+                    column: start.column + 1,
+                    snippet: line_snippet(source, node.start_byte()),
+                    classification,
+                });
+            }
+        }
+        // qids have no named children we care about — don't recurse into them
+        return;
+    }
+
+    // Walk children using a cursor so we can observe each child's field name
+    // and propagate the context accordingly.
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            let child = cursor.node();
+            if child.is_named() {
+                let child_ctx = descend_ctx(node.kind(), cursor.field_name(), ctx);
+                classify_qids(
+                    &child,
+                    source,
+                    child_ctx,
+                    type_ctx,
+                    import_ctx,
+                    target_constructor,
+                    display,
+                    module,
+                    out,
+                );
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// Resolve a classifier context at a leaf qid into a concrete `SiteKind`.
+fn classify_from_ctx(_qid: &Node, ctx: ClassifyCtx) -> SiteKind {
+    match ctx {
+        ClassifyCtx::CaseBranchPattern => SiteKind::CaseBranch,
+        ClassifyCtx::FunctionArgPattern => SiteKind::FunctionArgPattern,
+        ClassifyCtx::LambdaArgPattern => SiteKind::LambdaArgPattern,
+        ClassifyCtx::LetBindingPattern => SiteKind::LetBindingPattern,
+        ClassifyCtx::Unknown => SiteKind::ExpressionPosition,
+        ClassifyCtx::TypeDeclaration => SiteKind::ExpressionPosition, // unreachable
+    }
+}
+
+/// Pass 2 of the constructor-site walker: walk every `case_of_expr` whose
+/// scrutinee type resolves to the target type, and if the target constructor
+/// has no explicit branch but the case has a wildcard, emit a
+/// `CaseWildcardCovered` site. This is the equivalent of today's "wildcard
+/// branch handled {constructor_name}" skip message, lifted into the structured
+/// site model.
+#[allow(clippy::too_many_arguments)]
+fn collect_wildcard_covered(
+    node: &Node,
+    source: &str,
+    type_ctx: &TypeContext,
+    import_ctx: &ImportContext,
+    target_constructor: &str,
+    display: &str,
+    module: &str,
+    out: &mut Vec<ConstructorSite>,
+) {
+    if node.kind() == "type_declaration" {
+        return;
+    }
+
+    if node.kind() == "case_of_expr" {
+        let mut branches_on_type = false;
+        let mut has_target_branch = false;
+        let mut has_wildcard = false;
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() != "case_of_branch" {
+                continue;
+            }
+            let Some(pattern) = child.child_by_field_name("pattern") else {
+                continue;
+            };
+            if pattern_is_wildcard(&pattern, source) {
+                has_wildcard = true;
+                continue;
+            }
+            if let Some(found) = find_constructor_in_pattern(&pattern, source, type_ctx, import_ctx)
+            {
+                branches_on_type = true;
+                if found == target_constructor {
+                    has_target_branch = true;
+                }
+            }
+        }
+
+        if branches_on_type && has_wildcard && !has_target_branch {
+            let start = node.start_position();
+            let declaration = enclosing_top_level_decl(node)
+                .map(|d| {
+                    d.child_by_field_name("functionDeclarationLeft")
+                        .and_then(|fdl| fdl.named_child(0))
+                        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string())
+                })
+                .unwrap_or_else(|| "<top-level>".to_string());
+            out.push(ConstructorSite {
+                display: display.to_string(),
+                module: module.to_string(),
+                declaration,
+                line: start.row + 1,
+                column: start.column + 1,
+                snippet: line_snippet(source, node.start_byte()),
+                classification: SiteKind::CaseWildcardCovered,
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_wildcard_covered(
+            &child,
+            source,
+            type_ctx,
+            import_ctx,
+            target_constructor,
+            display,
+            module,
+            out,
+        );
+    }
+}
+
 /// Walk to the outermost ancestor of a node (its tree's root). Needed because the
 /// recursive walker in `collect_case_sites_in_tree` receives nodes without a direct
 /// root reference and must locate root on demand for top-level declaration lookup.
@@ -783,14 +1256,12 @@ fn collect_case_exprs(
         }
 
         if matches {
-            let wildcard = has_wildcard_branch(node, source);
             let function = find_enclosing_function(node, source);
 
             results.push(CaseExprInfo {
                 byte_range: node.byte_range(),
                 line: node.start_position().row + 1,
                 function,
-                has_wildcard: wildcard,
             });
         }
     }
@@ -1263,6 +1734,7 @@ pub fn execute_add_variant(
         variant_name: constructor_name,
         edits,
         skipped,
+        references_not_rewritten: Vec::new(),
     })
 }
 
@@ -1484,14 +1956,29 @@ pub fn execute_rm_variant(
         bail!("constructor {constructor_name} not found");
     }
 
-    // Step 1: Remove the variant from the type declaration.
+    // Step 1: Run the classifier over the pristine project state. This gives
+    // us (a) the full set of reference sites for the advisory list and (b) a
+    // `CaseWildcardCovered` report for cases whose wildcard already catches
+    // the removed constructor. The iterative branch-removal loop below uses
+    // its own per-file walk (with `find_matching_branch`) rather than trying
+    // to reuse byte ranges from here, because removals shift positions.
+    let pristine_sites = collect_constructor_sites(
+        &project,
+        &elm_files,
+        &target_module,
+        type_name,
+        constructor_name,
+        &constructor_map,
+    )?;
+
+    // Step 2: Remove the variant from the type declaration.
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("could not read {}", file.display()))?;
     let tree = parser::parse(&source)?;
 
     let new_source = remove_variant_from_type(&source, &tree, type_name, constructor_name)?;
 
-    // Step 2: Walk the project and remove branches, collecting all writes.
+    // Step 3: Walk the project and remove branches, collecting all writes.
     let mut edits = Vec::new();
     let mut skipped = Vec::new();
     let mut pending_writes: Vec<(PathBuf, String)> = Vec::new();
@@ -1557,32 +2044,22 @@ pub fn execute_rm_variant(
                     &modified_source,
                     &type_ctx,
                     &fresh_import_ctx,
+                ) && let Some(branch) = find_matching_branch(
+                    &case_node,
+                    &modified_source,
+                    constructor_name,
+                    &type_ctx,
+                    &fresh_import_ctx,
                 ) {
-                    if let Some(branch) = find_matching_branch(
-                        &case_node,
-                        &modified_source,
-                        constructor_name,
-                        &type_ctx,
-                        &fresh_import_ctx,
-                    ) {
-                        modified_source = remove_case_branch(&modified_source, &branch);
-                        file_edits.push(CaseEdit {
-                            file: display.clone(),
-                            module: module_name.clone(),
-                            function: fresh_case.function.clone(),
-                            line: fresh_case.line,
-                        });
-                        removed_one = true;
-                        break; // Re-parse after each removal.
-                    } else if fresh_case.has_wildcard {
-                        skipped.push(CaseSkip {
-                            file: display.clone(),
-                            module: module_name.clone(),
-                            function: fresh_case.function.clone(),
-                            line: fresh_case.line,
-                            reason: format!("wildcard branch handled {constructor_name}"),
-                        });
-                    }
+                    modified_source = remove_case_branch(&modified_source, &branch);
+                    file_edits.push(CaseEdit {
+                        file: display.clone(),
+                        module: module_name.clone(),
+                        function: fresh_case.function.clone(),
+                        line: fresh_case.line,
+                    });
+                    removed_one = true;
+                    break; // Re-parse after each removal.
                 }
             }
             if !removed_one {
@@ -1597,7 +2074,32 @@ pub fn execute_rm_variant(
         }
     }
 
-    // Step 3: Write all files atomically.
+    // Step 4: Build the skip list from the pristine walker's
+    // `CaseWildcardCovered` sites, and the advisory list from every
+    // non-clean-removal site. The advisory is the elmq-structured hint a
+    // caller would otherwise have to reconstruct from `elm make` diagnostics.
+    let mut references_not_rewritten: Vec<ConstructorSiteReport> = Vec::new();
+    for site in pristine_sites {
+        match &site.classification {
+            SiteKind::CaseBranch => {
+                // Reported via the branch-removal loop above as a `CaseEdit`.
+            }
+            SiteKind::CaseWildcardCovered => {
+                skipped.push(CaseSkip {
+                    file: site.display.clone(),
+                    module: site.module.clone(),
+                    function: site.declaration.clone(),
+                    line: site.line,
+                    reason: "wildcard branch covers removed variant".to_string(),
+                });
+            }
+            _ => {
+                references_not_rewritten.push(site.into_report());
+            }
+        }
+    }
+
+    // Step 5: Write all files atomically.
     if !dry_run {
         for (path, content) in &pending_writes {
             writer::atomic_write(path, content)?;
@@ -1611,6 +2113,100 @@ pub fn execute_rm_variant(
         variant_name: constructor_name.to_string(),
         edits,
         skipped,
+        references_not_rewritten,
+    })
+}
+
+/// Read-only: collect every project-wide reference to a given constructor,
+/// grouped by file, with classification (case branch, expression position,
+/// refutable-pattern position, etc.). The discovery/audit counterpart to
+/// `execute_rm_variant`'s advisory list — useful on its own but not part of
+/// the rm loop.
+pub fn execute_variant_refs(
+    file: &Path,
+    type_name: &str,
+    constructor_name: &str,
+) -> Result<RefsResult> {
+    let project = Project::discover(file)?;
+    let target_module = project.module_name(file)?;
+    let elm_files = project.elm_files()?;
+    let type_file_display = relative_display(file, &project.root);
+
+    // Validate: the target type must exist in the given file.
+    let source = std::fs::read_to_string(file)
+        .with_context(|| format!("could not read {}", file.display()))?;
+    let tree = parser::parse(&source)?;
+    {
+        let root = tree.root_node();
+        let mut cursor = root.walk();
+        let mut found = false;
+        for child in root.named_children(&mut cursor) {
+            if child.kind() == "type_declaration"
+                && let Some(name_node) = child.child_by_field_name("name")
+                && let Ok(name) = name_node.utf8_text(source.as_bytes())
+                && name == type_name
+            {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            bail!("type {type_name} not found in {}", file.display());
+        }
+    }
+
+    let constructor_map = build_constructor_map(&project, &elm_files)?;
+
+    // Validate: the constructor must exist and belong to the given type.
+    match constructor_map.get(constructor_name) {
+        Some(type_info) => {
+            if type_info.module != target_module || type_info.type_name != type_name {
+                bail!(
+                    "constructor {constructor_name} belongs to {}.{}, not {target_module}.{type_name}",
+                    type_info.module,
+                    type_info.type_name
+                );
+            }
+        }
+        None => bail!("constructor {constructor_name} not found"),
+    }
+
+    let sites = collect_constructor_sites(
+        &project,
+        &elm_files,
+        &target_module,
+        type_name,
+        constructor_name,
+        &constructor_map,
+    )?;
+
+    let total_sites = sites.len();
+    let total_clean = sites
+        .iter()
+        .filter(|s| s.classification.is_clean_removal())
+        .count();
+    let total_blocking = total_sites - total_clean;
+
+    let reports: Vec<ConstructorSiteReport> = sites.into_iter().map(|s| s.into_report()).collect();
+
+    // Group by file, preserving walker order (already sorted by (file, line, col)).
+    let mut grouped: Vec<(String, Vec<ConstructorSiteReport>)> = Vec::new();
+    for r in &reports {
+        match grouped.last_mut() {
+            Some((last_file, group)) if last_file == &r.file => group.push(r.clone()),
+            _ => grouped.push((r.file.clone(), vec![r.clone()])),
+        }
+    }
+
+    Ok(RefsResult {
+        type_file: type_file_display,
+        type_name: type_name.to_string(),
+        constructor: constructor_name.to_string(),
+        total_sites,
+        total_clean,
+        total_blocking,
+        sites: reports,
+        sites_by_file: grouped,
     })
 }
 

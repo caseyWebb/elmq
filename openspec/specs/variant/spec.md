@@ -38,7 +38,7 @@ The system SHALL provide a `variant add` command that appends a constructor to a
 - **THEN** the system SHALL error with a message indicating the constructor already exists
 
 ### Requirement: Remove a variant constructor
-The system SHALL provide a `variant rm` command that removes a constructor from a custom type declaration and removes matching branches from all case expressions project-wide.
+The system SHALL provide a `variant rm` command that removes a constructor from a custom type declaration, removes matching branches from all case expressions project-wide (including nested `union_pattern` sites such as `Just Increment`), and reports every additional reference that the command does not rewrite so the user can fix them before running `elm make`. The command SHALL NOT refuse to mutate when non-rewritable references exist; the rewrite is best-effort within the "remove case branches" scope, and the advisory list is a hint, not a gate.
 
 #### Scenario: Remove variant from type and case expressions
 - **GIVEN** `Types.elm` defines `type Msg = Increment | Decrement | Reset` and `Main.elm` has a case expression with a `Reset -> ...` branch
@@ -53,15 +53,40 @@ The system SHALL provide a `variant rm` command that removes a constructor from 
 #### Scenario: Wildcard branch covers removed variant
 - **GIVEN** a case expression has a `_ -> ...` branch and no explicit branch for the removed constructor
 - **WHEN** a variant is removed
-- **THEN** the case expression SHALL NOT be modified, and an info message SHALL be emitted
+- **THEN** the case expression SHALL NOT be modified, and the site SHALL appear in the `skipped` list with reason indicating the wildcard covers the removed variant
 
 #### Scenario: Last variant removal
 - **WHEN** the type has only one constructor and `variant rm` is run
 - **THEN** the system SHALL error with a message suggesting `elmq rm` to remove the entire type
 
+#### Scenario: Nested union pattern removed
+- **GIVEN** `Main.elm` contains `case x of Just Increment -> ...` and `Increment` is being removed
+- **WHEN** `variant rm` is run
+- **THEN** the `Just Increment -> ...` branch SHALL be removed (previously silently missed)
+
+#### Scenario: Expression-position references reported but not rewritten
+- **GIVEN** `Init.elm` contains `init = Increment 1` and `Increment` is being removed
+- **WHEN** `variant rm` is run
+- **THEN** the type declaration SHALL be updated, the `Init.elm` reference SHALL NOT be rewritten, and the site SHALL appear in the `references_not_rewritten` section of the output classified as `expression-position`
+
+#### Scenario: Function-arg-pattern references reported but not rewritten
+- **GIVEN** `Arg.elm` contains `f (Increment n) = n` and `Increment` is being removed
+- **WHEN** `variant rm` is run
+- **THEN** the declaration SHALL NOT be rewritten and the site SHALL appear in `references_not_rewritten` classified as `function-arg-pattern`
+
+#### Scenario: Mixed clean and blocking sites in one file
+- **GIVEN** `Update.elm` has both a `case msg of Increment n -> ...` branch *and* a separate `init = Increment 1` reference
+- **WHEN** `variant rm` is run
+- **THEN** the case branch SHALL be removed, the expression-position site SHALL be listed in `references_not_rewritten`, and the file SHALL be written with the branch removed
+
+#### Scenario: Clean-only run produces no advisory section
+- **GIVEN** the constructor is only referenced from case branches
+- **WHEN** `variant rm` is run
+- **THEN** the compact output SHALL NOT include a `references not rewritten` section and `references_not_rewritten` in JSON output SHALL be empty
+
 #### Scenario: Dry run
 - **WHEN** `--dry-run` is passed
-- **THEN** no files SHALL be written, but the output SHALL report what would change
+- **THEN** no files SHALL be written, but the output SHALL report what would change *and* the advisory list of references not rewritten
 
 #### Scenario: Constructor not found
 - **WHEN** the constructor name does not exist in the target type
@@ -96,7 +121,7 @@ The system SHALL resolve constructors through import contexts to identify which 
 - **THEN** only `Msg` case expressions SHALL be modified; `Color` case expressions SHALL be untouched
 
 ### Requirement: Result reporting
-Both `variant add` and `variant rm` SHALL return structured results including the file, module name, enclosing function name (bare, not qualified), and line number for each edit and skip.
+Both `variant add` and `variant rm` SHALL return structured results including the file, module name, enclosing function name (bare, not qualified), and line number for each edit and skip. The `variant rm` result SHALL additionally include a `references_not_rewritten` array containing every reference to the removed constructor that was not rewritten, classified by the site's syntactic role.
 
 #### Scenario: Compact output
 - **WHEN** default format is used
@@ -109,7 +134,13 @@ Both `variant add` and `variant rm` SHALL return structured results including th
 
 #### Scenario: JSON output
 - **WHEN** `--format json` is used
-- **THEN** output SHALL be a JSON object with `dry_run`, `type_file`, `type_name`, `variant_name`, `edits`, and `skipped` arrays
+- **THEN** `variant add` output SHALL be a JSON object with `dry_run`, `type_file`, `type_name`, `variant_name`, `edits`, and `skipped` arrays
+- **AND** `variant rm` output SHALL additionally include a `references_not_rewritten` array of objects with `file`, `line`, `column`, `declaration`, `kind`, and `snippet`
+
+#### Scenario: Advisory section in compact rm output
+- **GIVEN** `variant rm` found at least one non-case-branch reference to the removed constructor
+- **WHEN** default format is used
+- **THEN** the compact output SHALL include a `references not rewritten (N):` section listing each blocking site with its file, line, enclosing declaration, classification, and a one-line snippet, and SHALL close with a hint to run `elm make` to verify
 
 ### Requirement: Atomic writes
 All file modifications SHALL be collected before any writes occur. If any transformation fails, no files SHALL be modified.
@@ -222,3 +253,63 @@ The system SHALL accept a repeatable `--fill <key>=<body>` flag on `variant add`
 #### Scenario: Backward compatibility without --fill
 - **WHEN** `variant add` is run without any `--fill` flags
 - **THEN** the behavior SHALL be identical to the pre-change `variant add`: every matching case expression receives `Debug.todo "<VariantName>"`
+
+### Requirement: Inspect constructor references across the project
+The system SHALL provide a read-only `elmq variant refs` command that walks the project for every reference to a given custom-type constructor and emits each site classified by the syntactic role it plays (case branch, function argument pattern, lambda argument pattern, let-binding pattern, or expression position). The command SHALL NOT modify any files and SHALL NOT depend on the project being in a compiling state.
+
+#### Scenario: List case-branch references
+- **GIVEN** `src/Types.elm` defines `type Msg = Increment | Decrement` and `src/Update.elm` has `case msg of Increment n -> ...`
+- **WHEN** `elmq variant refs src/Types.elm --type Msg Increment` is run
+- **THEN** the output SHALL list one site in `src/Update.elm` classified as `case-branch` with the enclosing function name and line number
+
+#### Scenario: List expression-position references
+- **GIVEN** `src/Types.elm` defines `type Msg = Increment | Decrement` and `src/Init.elm` contains `init = Increment 1`
+- **WHEN** `elmq variant refs src/Types.elm --type Msg Increment` is run
+- **THEN** the output SHALL list one site in `src/Init.elm` classified as `expression-position` with a snippet of the reference line
+
+#### Scenario: List function-arg-pattern references
+- **GIVEN** `src/Arg.elm` contains `f (Increment n) = n`
+- **WHEN** `elmq variant refs` is run against `Increment`
+- **THEN** the output SHALL list the site classified as `function-arg-pattern`
+
+#### Scenario: List lambda-arg-pattern references
+- **GIVEN** `src/Lambda.elm` contains `go = \(Increment n) -> n`
+- **WHEN** `elmq variant refs` is run against `Increment`
+- **THEN** the output SHALL list the site classified as `lambda-arg-pattern`
+
+#### Scenario: List let-binding-pattern references
+- **GIVEN** `src/Let.elm` contains `foo = let (Increment k) = x in k`
+- **WHEN** `elmq variant refs` is run against `Increment`
+- **THEN** the output SHALL list the site classified as `let-binding-pattern`
+
+#### Scenario: Nested union patterns are detected
+- **GIVEN** `src/Outer.elm` contains `case x of Just Increment -> ...`
+- **WHEN** `elmq variant refs` is run against `Increment`
+- **THEN** the output SHALL list the site classified as `case-branch` (not silently missed)
+
+#### Scenario: Wildcard-covered case sites reported
+- **GIVEN** `src/View.elm` has `case msg of Foo -> text ""; _ -> text "x"` and the target constructor `Increment` has no explicit branch
+- **WHEN** `elmq variant refs` is run against `Increment`
+- **THEN** the output SHALL list the site classified as `case-wildcard-covered`
+
+#### Scenario: Constructor's own definition is excluded
+- **GIVEN** `src/Types.elm` contains `type Msg = Increment | Decrement` and no other references to `Increment`
+- **WHEN** `elmq variant refs src/Types.elm --type Msg Increment` is run
+- **THEN** the output SHALL list zero sites (the constructor's own type declaration is not a reference)
+
+#### Scenario: Constructor not found
+- **WHEN** the constructor name does not exist in the project
+- **THEN** the command SHALL error with `constructor <name> not found` and exit non-zero
+
+#### Scenario: Constructor belongs to a different type
+- **WHEN** the user passes a constructor that exists but belongs to a different type than `--type`
+- **THEN** the command SHALL error with a message indicating the constructor's actual owning type and exit non-zero
+
+#### Scenario: Compact output format
+- **WHEN** default format is used
+- **THEN** output SHALL group sites by file, showing one site per line with line number, enclosing declaration, classification, and a source snippet for non-case-branch sites, plus a header summarizing total, clean, and blocking counts
+
+#### Scenario: JSON output format
+- **WHEN** `--format json` is passed
+- **THEN** output SHALL be a JSON object with `type_file`, `type_name`, `constructor`, `total_sites`, `total_clean`, `total_blocking`, and a `sites` array of objects each containing `file`, `line`, `column`, `declaration`, `kind`, and `snippet`
+- **AND** `kind` SHALL be one of `case-branch`, `case-wildcard-covered`, `function-arg-pattern`, `lambda-arg-pattern`, `let-binding-pattern`, or `expression-position`
