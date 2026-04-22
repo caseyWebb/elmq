@@ -383,7 +383,7 @@ Matches that land outside any top-level declaration (imports, module header) rep
 elmq guide
 ```
 
-Prints the built-in agent integration guide to stdout. This is the guide that tells LLM coding agents how to use elmq effectively — when to prefer `elmq get` over `Read`, how to chain edits, etc. The Claude Code plugin (see below) uses this automatically via a SessionStart hook.
+Prints the built-in agent integration guide to stdout. This is the guide that tells LLM coding agents how to use elmq effectively — when to prefer `elmq get` over `Read`, how to chain edits, etc. The Claude Code plugin (`/plugin install elmq@caseyWebb`) uses this automatically via a SessionStart hook.
 
 ### JSON output
 
@@ -411,7 +411,7 @@ elmq list src/Main.elm --format json
 
 elmq is designed to be used from any coding agent that can shell out to a CLI (Claude Code, Cursor, Aider, Codex, etc.). The built-in agent guide (`elmq guide`) tells agents how to use elmq effectively.
 
-**Claude Code**: Install the plugin with `/plugin marketplace add caseyWebb/elmq`, then `/plugin install elmq@caseyWebb`. It automatically injects the guide into sessions working in Elm projects.
+**Claude Code**: Install the plugin with `/plugin install elmq@caseyWebb`. It automatically injects the guide into sessions working in Elm projects.
 
 **Other agents**: Pipe `elmq guide` into your agent's system prompt or project instructions.
 
