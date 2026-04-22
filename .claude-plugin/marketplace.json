@@ -1,0 +1,20 @@
+{
+  "name": "caseyWebb",
+  "owner": {
+    "name": "Casey Webb"
+  },
+  "metadata": {
+    "description": "elmq — Elm file querying and editing CLI",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "elmq",
+      "description": "Automatically injects elmq CLI guidance into Claude Code sessions working in Elm projects",
+      "version": "1.0.0",
+      "source": "./",
+      "category": "developer-tools",
+      "tags": ["elm", "elmq", "tree-sitter", "cli"]
+    }
+  ]
+}
