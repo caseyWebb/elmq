@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 (2026-05-07)
+
+## What's Changed
+* revert(plugin): drop self-hosted marketplace, use caseyWebb/claude-plugins by @caseyWebb in https://github.com/caseyWebb/elmq/pull/84
+* chore(deps): Bump actions/setup-node from 4 to 6 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/83
+* chore(deps): Bump actions/upload-artifact from 4 to 7 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/80
+* chore(deps): Bump actions/download-artifact from 4 to 8 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/81
+* chore(deps): Bump actions/attest-build-provenance from 2 to 4 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/82
+* chore(deps): Bump clap from 4.6.0 to 4.6.1 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/87
+* chore(deps): Bump googleapis/release-please-action from 4 to 5 by @dependabot[bot] in https://github.com/caseyWebb/elmq/pull/86
+
+
+**Full Changelog**: https://github.com/caseyWebb/elmq/compare/v0.8.0...v0.9.0
+
 ## 0.8.0 (2026-04-14)
 
 ## What's Changed
