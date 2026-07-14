@@ -156,7 +156,6 @@ pub fn remove_declaration(source: &str, summary: &FileSummary, name: &str) -> Re
 /// Add or replace an import. If an import with the same module name exists, replace it.
 /// Otherwise insert in alphabetical order.
 pub fn add_import(source: &str, summary: &FileSummary, import_clause: &str) -> String {
-    let lines: Vec<&str> = source.lines().collect();
     let full_import = if import_clause.starts_with("import ") {
         import_clause.to_string()
     } else {
@@ -164,10 +163,11 @@ pub fn add_import(source: &str, summary: &FileSummary, import_clause: &str) -> S
     };
 
     // Extract the module name from the new import for comparison
-    let new_module = extract_import_module(&full_import);
+    let new_module = extract_import_module(&full_import).to_string();
 
     if summary.imports.is_empty() {
         // No imports yet — insert after module line with blank line separation
+        let lines: Vec<&str> = source.lines().collect();
         let module_end = find_module_end_line(&lines);
         let mut result = String::new();
         for line in &lines[..module_end] {
@@ -184,21 +184,56 @@ pub fn add_import(source: &str, summary: &FileSummary, import_clause: &str) -> S
         return result;
     }
 
-    // Find the import block range
-    let (import_start, import_end) = find_import_range(&lines);
+    // Parse so that each import is handled as a whole tree-sitter `import_clause`
+    // node. A line-based approach mishandles imports whose `exposing (...)` list
+    // spans several lines: continuation lines (`    exposing`, `        ( Foo`, …)
+    // do not start with "import " and were silently dropped, corrupting a
+    // neighboring import's exposing list.
+    let tree = match parser::parse(source) {
+        Ok(t) => t,
+        Err(_) => return source.to_string(),
+    };
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let import_nodes: Vec<Node> = root
+        .named_children(&mut cursor)
+        .filter(|c| c.kind() == "import_clause")
+        .collect();
 
-    // Collect existing imports, replacing if same module
+    // No parseable import clauses — fall back to inserting after the module line.
+    if import_nodes.is_empty() {
+        let lines: Vec<&str> = source.lines().collect();
+        let module_end = find_module_end_line(&lines);
+        let mut result = String::new();
+        for line in &lines[..module_end] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        result.push('\n');
+        result.push_str(&full_import);
+        result.push('\n');
+        for line in &lines[module_end..] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        return result;
+    }
+
+    // Byte span covering the whole import block (first import start .. last import end).
+    let block_start = import_nodes.first().unwrap().start_byte();
+    let block_end = import_nodes.last().unwrap().end_byte();
+
+    // Collect existing imports as whole (possibly multi-line) clause texts,
+    // replacing if same module.
     let mut imports: Vec<String> = Vec::new();
     let mut replaced = false;
-    for line in &lines[import_start..import_end] {
-        if line.starts_with("import ") {
-            let existing_module = extract_import_module(line);
-            if existing_module == new_module {
-                imports.push(full_import.clone());
-                replaced = true;
-            } else {
-                imports.push(line.to_string());
-            }
+    for node in &import_nodes {
+        let text = node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+        if extract_import_module(&text) == new_module {
+            imports.push(full_import.clone());
+            replaced = true;
+        } else {
+            imports.push(text);
         }
     }
 
@@ -212,18 +247,9 @@ pub fn add_import(source: &str, summary: &FileSummary, import_clause: &str) -> S
     }
 
     let mut result = String::new();
-    for line in &lines[..import_start] {
-        result.push_str(line);
-        result.push('\n');
-    }
-    for imp in &imports {
-        result.push_str(imp);
-        result.push('\n');
-    }
-    for line in &lines[import_end..] {
-        result.push_str(line);
-        result.push('\n');
-    }
+    result.push_str(&source[..block_start]);
+    result.push_str(&imports.join("\n"));
+    result.push_str(&source[block_end..]);
     result
 }
 
@@ -442,20 +468,6 @@ fn find_module_end_line(lines: &[&str]) -> usize {
         }
     }
     1 // Default to after first line if no module found
-}
-
-fn find_import_range(lines: &[&str]) -> (usize, usize) {
-    let mut start = None;
-    let mut end = 0;
-    for (i, line) in lines.iter().enumerate() {
-        if line.starts_with("import ") {
-            if start.is_none() {
-                start = Some(i);
-            }
-            end = i + 1;
-        }
-    }
-    (start.unwrap_or(0), end)
 }
 
 /// Rewrite all references to `old_module` as `new_module` in the given source.
