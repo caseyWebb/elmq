@@ -290,6 +290,75 @@ fn import_single_clause_output_unchanged() {
     );
 }
 
+// A file whose import block contains a multi-line `exposing (...)` clause that
+// is NOT the last import in the block. Regression fixture for the bug where
+// `add import` dropped a neighboring import's multi-line exposing continuation.
+const MULTILINE_EXPOSING: &str = "module Repro exposing (main)
+
+import Html exposing (Html, text)
+import App.Supplier.Pages.Profile.Routing as ProfilePageRoute
+    exposing
+        ( BillingRoute(..)
+        , ConnectionManagementRoute(..)
+        , MembershipRoute(..)
+        , Route(..)
+        )
+import Set exposing (Set)
+
+
+main : Html msg
+main =
+    text \"hi\"
+";
+
+#[test]
+fn import_add_preserves_neighboring_multiline_exposing() {
+    let f = with_temp_elm(MULTILINE_EXPOSING);
+    let path = f.path().to_str().unwrap();
+
+    let output = elmq()
+        .args([
+            "add",
+            "import",
+            path,
+            "Effect.LocalStorage as LocalStorage",
+            "Json.Encode as Encode",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let content = std::fs::read_to_string(f.path()).unwrap();
+
+    // The two new imports must be added.
+    assert!(content.contains("import Effect.LocalStorage as LocalStorage"));
+    assert!(content.contains("import Json.Encode as Encode"));
+
+    // The neighboring multi-line exposing list must survive intact — this is
+    // what regressed (the whole `exposing (...)` block was silently deleted).
+    assert!(
+        content.contains("import App.Supplier.Pages.Profile.Routing as ProfilePageRoute"),
+        "aliased import line missing:\n{content}"
+    );
+    for variant in [
+        "BillingRoute(..)",
+        "ConnectionManagementRoute(..)",
+        "MembershipRoute(..)",
+        "Route(..)",
+    ] {
+        assert!(
+            content.contains(variant),
+            "exposing entry {variant} was dropped:\n{content}"
+        );
+    }
+
+    // The `exposing` keyword of that import must still be present.
+    assert!(
+        content.contains("exposing") && content.matches("exposing").count() >= 3,
+        "an exposing clause went missing:\n{content}"
+    );
+}
+
 const BROKEN: &str = "module Broken exposing (bar)\n\nbar =\n    let\n        x = 1\n";
 
 #[test]

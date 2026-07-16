@@ -2713,6 +2713,52 @@ go =
     );
 }
 
+#[test]
+fn refs_constructor_resolution_is_walk_order_independent() {
+    // Regression guard for a name-collision bug: two modules each declare an
+    // `Increment` constructor. The project-wide constructor index must not let
+    // one clobber the other, so `refs Types.Msg.Increment` resolves the real
+    // owning type AND finds its genuine reference sites regardless of the
+    // (non-deterministic) directory-walk order. Before the fix, an unfavorable
+    // order made this either error ("declaration 'Increment' not found") or
+    // silently report zero sites.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    create_project(root, &["src"]);
+    write_msg_types(root); // Types.Msg = Increment | Decrement | Reset
+    write_elm(
+        root,
+        "src/Other.elm",
+        "\
+module Other exposing (..)
+
+type Counter
+    = Increment
+    | Reset
+",
+    );
+    // Main legitimately references Types.Msg.Increment (bare, via exposing).
+    write_elm(
+        root,
+        "src/Main.elm",
+        "\
+module Main exposing (..)
+
+import Types exposing (Msg(..))
+
+go : Msg
+go =
+    Increment
+",
+    );
+
+    let refs = refs_json(root, "src/Types.elm", "Msg", "Increment");
+    assert_eq!(
+        refs["total_sites"], 1,
+        "the genuine Types.Msg.Increment site in Main.elm must be found: {refs}"
+    );
+}
+
 // ============================================================================
 // write-safety rejection tests
 // ============================================================================
