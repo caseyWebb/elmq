@@ -164,12 +164,35 @@ fn extract_type_infos(tree: &tree_sitter::Tree, source: &str, module_name: &str)
     result
 }
 
-/// Build a project-wide map: constructor_name -> TypeInfo
+/// Extract the type declarations of a single file, scoped to that file's own
+/// module. Unlike [`build_constructor_map`], this is unaffected by same-named
+/// constructors declared in other modules — resolution against the returned
+/// list is therefore deterministic, not dependent on directory-walk order.
+fn type_infos_in_file(project: &Project, file: &Path) -> Result<Vec<TypeInfo>> {
+    let source = std::fs::read_to_string(file)
+        .with_context(|| format!("could not read {}", file.display()))?;
+    let tree = match parser::parse(&source) {
+        Ok(t) => t,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let module_name = project.module_name(file)?;
+    Ok(extract_type_infos(&tree, &source, &module_name))
+}
+
+/// Build a project-wide index: constructor_name -> every type declaring a
+/// constructor of that name.
+///
+/// Multiple modules may declare constructors that share a name (e.g. two `Msg`
+/// types each with `Increment`). Keying by name alone and keeping a single
+/// `TypeInfo` would let whichever file the directory walk visits last silently
+/// clobber the others, making resolution depend on non-deterministic walk
+/// order. Storing every candidate keeps resolution deterministic; consumers
+/// disambiguate by module/type against the context they already hold.
 fn build_constructor_map(
     project: &Project,
     elm_files: &[PathBuf],
-) -> Result<HashMap<String, TypeInfo>> {
-    let mut map = HashMap::new();
+) -> Result<HashMap<String, Vec<TypeInfo>>> {
+    let mut map: HashMap<String, Vec<TypeInfo>> = HashMap::new();
 
     for file in elm_files {
         let source = std::fs::read_to_string(file)
@@ -185,12 +208,29 @@ fn build_constructor_map(
 
         for type_info in extract_type_infos(&tree, &source, &module_name) {
             for variant in &type_info.variants {
-                map.insert(variant.name.clone(), type_info.clone());
+                map.entry(variant.name.clone())
+                    .or_default()
+                    .push(type_info.clone());
             }
         }
     }
 
+    // Deterministic candidate order regardless of directory-walk order, and
+    // drop any duplicate (module, type) pairs a malformed file could produce.
+    for candidates in map.values_mut() {
+        candidates.sort_by(|a, b| a.module.cmp(&b.module).then(a.type_name.cmp(&b.type_name)));
+        candidates.dedup_by(|a, b| a.module == b.module && a.type_name == b.type_name);
+    }
+
     Ok(map)
+}
+
+/// The types declaring a constructor of the given name (empty slice if none).
+fn constructor_candidates<'a>(
+    constructor_map: &'a HashMap<String, Vec<TypeInfo>>,
+    name: &str,
+) -> &'a [TypeInfo] {
+    constructor_map.get(name).map(Vec::as_slice).unwrap_or(&[])
 }
 
 // -- Variant definition parsing --
@@ -293,7 +333,7 @@ struct CaseSite {
 struct TypeContext<'a> {
     target_module: &'a str,
     target_type: &'a str,
-    constructor_map: &'a HashMap<String, TypeInfo>,
+    constructor_map: &'a HashMap<String, Vec<TypeInfo>>,
     current_module: &'a str,
 }
 
@@ -411,7 +451,7 @@ fn find_constructor_in_pattern(
 /// from the same module are always accessible).
 fn resolve_constructor(
     ctor_text: &str,
-    constructor_map: &HashMap<String, TypeInfo>,
+    constructor_map: &HashMap<String, Vec<TypeInfo>>,
     import_ctx: &ImportContext,
     current_module: &str,
 ) -> Option<(String, String)> {
@@ -419,18 +459,22 @@ fn resolve_constructor(
         // Qualified: e.g. "Msg.Increment" or "Sample.Increment"
         let prefix = &ctor_text[..dot_pos];
         let bare_name = &ctor_text[dot_pos + 1..];
-        // Resolve the prefix to a module name.
-        if let Some(module) = import_ctx.resolve_prefix(prefix) {
-            // Look up the bare constructor in the map.
-            if let Some(type_info) = constructor_map.get(bare_name)
-                && type_info.module == module
-            {
-                return Some((module.to_string(), type_info.type_name.clone()));
-            }
+        // Resolve the prefix to a module name, then pick the candidate type
+        // declared in exactly that module (not whichever happened to win a
+        // name-only lookup).
+        if let Some(module) = import_ctx.resolve_prefix(prefix)
+            && let Some(type_info) = constructor_candidates(constructor_map, bare_name)
+                .iter()
+                .find(|ti| ti.module == module)
+        {
+            return Some((module.to_string(), type_info.type_name.clone()));
         }
     } else {
-        // Bare constructor: look up in map, then verify it's accessible.
-        if let Some(type_info) = constructor_map.get(ctor_text) {
+        // Bare constructor: consider every type declaring this name and return
+        // the first that is accessible from the current file. In valid Elm at
+        // most one candidate is accessible, so the deterministic candidate
+        // order makes the result unambiguous.
+        for type_info in constructor_candidates(constructor_map, ctor_text) {
             // Same module — always accessible.
             if type_info.module == current_module {
                 return Some((type_info.module.clone(), type_info.type_name.clone()));
@@ -647,7 +691,7 @@ fn collect_case_sites(
     elm_files: &[PathBuf],
     target_module: &str,
     target_type: &str,
-    constructor_map: &HashMap<String, TypeInfo>,
+    constructor_map: &HashMap<String, Vec<TypeInfo>>,
     source_overrides: &HashMap<PathBuf, String>,
 ) -> Result<Vec<CaseSite>> {
     let mut sites = Vec::new();
@@ -909,7 +953,7 @@ fn collect_constructor_sites(
     target_module: &str,
     target_type: &str,
     target_constructor: &str,
-    constructor_map: &HashMap<String, TypeInfo>,
+    constructor_map: &HashMap<String, Vec<TypeInfo>>,
 ) -> Result<Vec<ConstructorSite>> {
     let mut sites: Vec<ConstructorSite> = Vec::new();
 
@@ -1579,11 +1623,11 @@ pub fn execute_add_variant(
         }
     }
 
-    if constructor_map.contains_key(&constructor_name) {
-        let existing = &constructor_map[&constructor_name];
-        if existing.module == target_module && existing.type_name == type_name {
-            bail!("constructor {constructor_name} already exists in type {type_name}");
-        }
+    if constructor_candidates(&constructor_map, &constructor_name)
+        .iter()
+        .any(|ti| ti.module == target_module && ti.type_name == type_name)
+    {
+        bail!("constructor {constructor_name} already exists in type {type_name}");
     }
 
     // Step 1: Modify the type declaration file.
@@ -1927,17 +1971,22 @@ pub fn execute_rm_variant(
     // Build the constructor map.
     let constructor_map = build_constructor_map(&project, &elm_files)?;
 
-    // Verify the constructor exists in the target type.
-    if let Some(type_info) = constructor_map.get(constructor_name) {
-        if type_info.module != target_module || type_info.type_name != type_name {
-            bail!(
+    // Verify the constructor exists in the target type. Check every candidate
+    // rather than a single name-keyed entry, so a same-named constructor in
+    // another module can't shadow the real one depending on walk order.
+    let candidates = constructor_candidates(&constructor_map, constructor_name);
+    if !candidates
+        .iter()
+        .any(|ti| ti.module == target_module && ti.type_name == type_name)
+    {
+        match candidates.first() {
+            Some(other) => bail!(
                 "constructor {constructor_name} belongs to {}.{}, not {target_module}.{type_name}",
-                type_info.module,
-                type_info.type_name
-            );
+                other.module,
+                other.type_name
+            ),
+            None => bail!("constructor {constructor_name} not found"),
         }
-    } else {
-        bail!("constructor {constructor_name} not found");
     }
 
     // Step 1: Run the classifier over the pristine project state. This gives
@@ -2106,17 +2155,18 @@ pub fn execute_rm_variant(
 /// constructor-map's view of the project.
 pub fn resolve_constructor_in_file(file: &Path, name: &str) -> Result<Option<(String, String)>> {
     let project = Project::discover(file)?;
-    let target_module = project.module_name(file)?;
-    let elm_files = project.elm_files()?;
-    let constructor_map = build_constructor_map(&project, &elm_files)?;
 
-    match constructor_map.get(name) {
-        Some(type_info) if type_info.module == target_module => Ok(Some((
-            type_info.module.clone(),
-            type_info.type_name.clone(),
-        ))),
-        _ => Ok(None),
+    // Resolve within the target file's own type declarations. A project-wide
+    // constructor map is keyed by unqualified name and clobbers on collision,
+    // so a same-named constructor in another module could win (depending on
+    // non-deterministic directory-walk order) and make this return None for a
+    // constructor that is in fact declared here.
+    for type_info in type_infos_in_file(&project, file)? {
+        if type_info.variants.iter().any(|v| v.name == name) {
+            return Ok(Some((type_info.module, type_info.type_name)));
+        }
     }
+    Ok(None)
 }
 
 /// Read-only: collect every project-wide reference to a given constructor,
@@ -2137,19 +2187,27 @@ pub fn execute_refs_for_constructor(file: &Path, constructor_name: &str) -> Resu
 
     let constructor_map = build_constructor_map(&project, &elm_files)?;
 
-    let type_name = match constructor_map.get(constructor_name) {
-        Some(type_info) => {
-            if type_info.module != target_module {
-                bail!(
-                    "constructor {constructor_name} belongs to {}.{}, not a type declared in {}",
-                    type_info.module,
-                    type_info.type_name,
-                    file.display()
-                );
-            }
-            type_info.type_name.clone()
-        }
-        None => bail!("constructor {constructor_name} not found"),
+    // Resolve the owning type from the target file itself — deterministic and
+    // unambiguous even when another module declares a constructor of the same
+    // name (build_constructor_map's name-only key would otherwise clobber and
+    // resolve order-dependently). The project-wide map is still used below to
+    // classify reference sites, which is order-safe because each site is
+    // compared against the resolved (target_module, type_name).
+    let type_name = match type_infos_in_file(&project, file)?
+        .into_iter()
+        .find(|ti| ti.variants.iter().any(|v| v.name == constructor_name))
+    {
+        Some(type_info) => type_info.type_name,
+        // Not declared here — if it exists elsewhere, point at the real owner.
+        None => match constructor_candidates(&constructor_map, constructor_name).first() {
+            Some(type_info) => bail!(
+                "constructor {constructor_name} belongs to {}.{}, not a type declared in {}",
+                type_info.module,
+                type_info.type_name,
+                file.display()
+            ),
+            None => bail!("constructor {constructor_name} not found"),
+        },
     };
 
     let sites = collect_constructor_sites(
